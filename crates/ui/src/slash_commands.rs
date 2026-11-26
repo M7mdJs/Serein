@@ -1400,7 +1400,8 @@ impl UserPicker {
 				let slash_font = egui::FontId::proportional(14.0);
 				let response = match target {
 					PickerTarget::Id => {
-						crate::composer_text::show_text_edit(ui, id, value, false, |ui, edit| {
+						let picker_width = (ui.available_width() - 25.0).max(24.0);
+						crate::composer_text::show_text_edit(ui, id, value, false, |edit| {
 							edit.align(egui::Align2::LEFT_CENTER)
 								.frame(egui::Frame::NONE)
 								.event_filter(user_picker_filter(was_open))
@@ -1409,11 +1410,13 @@ impl UserPicker {
 									"search-filters-user-picker-search-users",
 								))
 								.char_limit(65)
-								.desired_width((ui.available_width() - 25.0).max(24.0))
+								.desired_width(picker_width)
 						})
+						.response
 						.response
 					}
 					PickerTarget::Mention { char_limit } => {
+						let mention_width = ui.available_width();
 						crate::composer_text::show_text_edit_with_job(
 							ui,
 							id,
@@ -1429,7 +1432,7 @@ impl UserPicker {
 								job.wrap.max_width = f32::INFINITY;
 								job
 							},
-							|ui, edit| {
+							|edit| {
 								edit.align(egui::Align2::LEFT_CENTER)
 									.frame(egui::Frame::NONE)
 									.event_filter(user_picker_filter(was_open))
@@ -1437,9 +1440,10 @@ impl UserPicker {
 									.font(egui::FontId::proportional(14.0))
 									.text_color(text_color)
 									.char_limit(char_limit)
-									.desired_width(ui.available_width())
+									.desired_width(mention_width)
 							},
 						)
+						.response
 						.response
 					}
 				};
@@ -1880,6 +1884,7 @@ fn argument(
 	} else {
 		let font = egui::FontId::proportional(14.0);
 		let text_color = design::palette(ui).text_strong;
+		let arg_width = ui.available_width();
 		crate::composer_text::show_text_edit_with_job(
 			ui,
 			id,
@@ -1895,15 +1900,16 @@ fn argument(
 				job.wrap.max_width = f32::INFINITY;
 				job
 			},
-			|ui, edit| {
+			|edit| {
 				edit.align(egui::Align2::LEFT_CENTER)
 					.frame(egui::Frame::NONE)
 					.font(egui::FontId::proportional(14.0))
 					.text_color(text_color)
 					.char_limit(usize::from(option.max_length.unwrap_or(6000)).min(6000))
-					.desired_width(ui.available_width())
+					.desired_width(arg_width)
 			},
 		)
+		.response
 		.response
 	}
 }

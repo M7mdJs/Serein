@@ -236,13 +236,14 @@ impl SearchUi {
 				ui.set_height(28.0);
 				ui.horizontal_centered(|ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
+					let query_width = (ui.available_width() - 28.0).max(30.0);
 					let hint_widget =
 						egui::WidgetText::from(crate::composer_text::singleline_galley(
 							ui,
 							hint,
 							egui::TextStyle::Body.resolve(ui.style()),
 							colors.muted,
-							(ui.available_width() - 28.0).max(30.0),
+							query_width,
 						));
 					let output = crate::composer_text::show_text_edit_with_job(
 						ui,
@@ -250,12 +251,12 @@ impl SearchUi {
 						&mut self.query,
 						false,
 						|ui, value, width| filters::highlight(ui, value, width),
-						|ui, edit| {
+						|edit| {
 							edit.align(egui::Align2::LEFT_CENTER)
 								.char_limit(256)
 								.frame(egui::Frame::NONE)
 								.hint_text(hint_widget)
-								.desired_width((ui.available_width() - 28.0).max(30.0))
+								.desired_width(query_width)
 						},
 					);
 					let input = output

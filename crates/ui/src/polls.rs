@@ -681,22 +681,24 @@ fn answer_field(
 				ui.horizontal(|ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
 					let emoji = emoji_button(ui, answer.emoji.as_ref(), open, avatars, demo);
+					let answer_width = ui.available_width();
 					let text = crate::composer_text::show_text_edit(
 						ui,
 						ui.scope_id().with(("poll-answer", index)),
 						&mut answer.text,
 						false,
-						|ui, edit| {
+						|edit| {
 							edit.align(egui::Align2::LEFT_CENTER)
 								.hint_text(translate_args(
 									"polls-creator-answer-hint",
 									&[("number", &(index + 1).to_string())],
 								))
 								.char_limit(55)
-								.desired_width(ui.available_width())
+								.desired_width(answer_width)
 								.frame(egui::Frame::NONE)
 						},
 					)
+					.response
 					.response;
 					(emoji, text)
 				})

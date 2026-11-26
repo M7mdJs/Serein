@@ -560,7 +560,7 @@ impl Picker {
 					ui.scope_id().with("emoji-picker-search"),
 					&mut self.query,
 					false,
-					|_ui, edit| {
+					|edit| {
 						edit.align(egui::Align2::LEFT_CENTER)
 							.hint_text(crate::i18n::translate(
 								"emoji-picker-unicode-button-with-search-emoji",
@@ -569,6 +569,7 @@ impl Picker {
 							.desired_width(f32::INFINITY)
 					},
 				)
+				.response
 				.response
 				.changed()
 				{

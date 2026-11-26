@@ -29,6 +29,10 @@ struct BidiCore {
 	bidi_gesture: Option<Gesture>,
 	/// Preferred visual X (galley coordinates) across consecutive Up/Down steps.
 	preferred_x: Option<f32>,
+	/// Last interaction timestamp for caret blink phase without reading egui private fields.
+	last_interaction_time: f64,
+	/// Last observed cursor/selection range so caret moves pause cursor blinking.
+	last_cursor: Option<egui::text::CCursorRange>,
 }
 
 #[derive(Default)]
@@ -1259,15 +1263,15 @@ impl Bidi {
 		text: &str,
 		ime_active: bool,
 		inlines: &[Inline],
-	) {
+	) -> bool {
 		if ime_active || !ctx.memory(|m| m.has_focus(id)) || self.rows.is_empty() {
-			return;
+			return false;
 		}
 		let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) else {
-			return;
+			return false;
 		};
 		let Some(mut range) = state.cursor.char_range() else {
-			return;
+			return false;
 		};
 		let os = ctx.os();
 		let mut changed = false;
@@ -1303,7 +1307,7 @@ impl Bidi {
 			});
 		});
 		if pending.is_empty() {
-			return;
+			return false;
 		}
 		let total_chars = text.chars().count();
 		for (key, modifiers) in pending {
@@ -1433,9 +1437,9 @@ impl Bidi {
 		if changed {
 			range.h_pos = None;
 			state.cursor.set_char_range(Some(range));
-			state.last_interaction_time = ctx.input(|i| i.time);
 			state.store(ctx, id);
 		}
+		changed
 	}
 }
 
@@ -1491,8 +1495,10 @@ impl BidiCore {
 			self.preferred_x = None;
 			return;
 		}
-		if let Some(bidi) = &self.bidi {
-			bidi.handle_navigation(&mut self.preferred_x, ctx, id, text, ime_active, inlines);
+		if let Some(bidi) = &self.bidi
+			&& bidi.handle_navigation(&mut self.preferred_x, ctx, id, text, ime_active, inlines)
+		{
+			self.last_interaction_time = ctx.input(|i| i.time);
 		}
 	}
 
@@ -1557,6 +1563,9 @@ impl BidiCore {
 			secondary: CCursor::new(range.0),
 			h_pos: None,
 		};
+		if pressed || output.cursor_range != Some(range) {
+			self.last_interaction_time = ctx.input(|i| i.time);
+		}
 		if output.cursor_range != Some(range) {
 			output.cursor_range = Some(range);
 			output.state.cursor.set_char_range(Some(range));
@@ -1565,18 +1574,28 @@ impl BidiCore {
 	}
 
 	fn finish_paint(
-		&self,
+		&mut self,
 		ui: &mut egui::Ui,
 		output: &mut egui::text_edit::TextEditOutput,
 		slot: egui::layers::ShapeIdx,
 		hid_native: bool,
 		outer_visuals: &egui::Visuals,
-		multiline: bool,
 	) {
+		if output.response.changed() || self.last_cursor != output.cursor_range {
+			self.last_interaction_time = ui.input(|i| i.time);
+			self.last_cursor = output.cursor_range;
+		}
 		if let Some(bidi) = &self.bidi {
-			self.paint_bidi_internal(ui, bidi, output, slot, outer_visuals, multiline);
+			self.paint_bidi_internal(
+				ui,
+				bidi,
+				output,
+				slot,
+				outer_visuals,
+				self.last_interaction_time,
+			);
 		} else if hid_native {
-			paint_ltr_fallback(ui, output, slot, outer_visuals);
+			paint_ltr_fallback(ui, output, slot, outer_visuals, self.last_interaction_time);
 		}
 	}
 
@@ -1587,7 +1606,7 @@ impl BidiCore {
 		output: &mut egui::text_edit::TextEditOutput,
 		slot: egui::layers::ShapeIdx,
 		visuals: &egui::Visuals,
-		multiline: bool,
+		last_interaction_time: f64,
 	) {
 		if !output.response.has_focus() {
 			return;
@@ -1622,24 +1641,6 @@ impl BidiCore {
 		let top = egui::pos2(x, row.top()) + origin;
 		let bottom = egui::pos2(x, row.bottom()) + origin;
 		let caret_rect = egui::Rect::from_min_max(top, bottom);
-		if !multiline {
-			let visible_w = output.text_clip_rect.width();
-			if output.galley.size().x > visible_w && visible_w > 0.0 {
-				let mut offset_x = output.state.text_offset.x;
-				let max_offset = (output.galley.size().x - visible_w).max(0.0);
-				if x < offset_x {
-					offset_x = x;
-				} else if x > offset_x + visible_w {
-					offset_x = x - visible_w;
-				}
-				offset_x = offset_x.clamp(0.0, max_offset);
-				if (offset_x - output.state.text_offset.x).abs() > 0.5 {
-					output.state.text_offset.x = offset_x;
-					output.state.clone().store(ui.ctx(), output.response.id);
-					ui.ctx().request_repaint();
-				}
-			}
-		}
 		if ui.memory(|mem| mem.owns_ime_events(output.response.id)) {
 			let to_global = ui
 				.ctx()
@@ -1653,14 +1654,7 @@ impl BidiCore {
 		}
 		if ui.input(|i| i.focused) && (clip.contains(top) || clip.contains(bottom)) {
 			let painter = ui.painter().with_clip_rect(clip);
-			paint_blinking_caret(
-				ui,
-				&painter,
-				visuals,
-				top,
-				bottom,
-				output.state.last_interaction_time,
-			);
+			paint_blinking_caret(ui, &painter, visuals, top, bottom, last_interaction_time);
 		}
 	}
 }
@@ -1697,6 +1691,7 @@ fn paint_ltr_fallback(
 	output: &egui::text_edit::TextEditOutput,
 	slot: egui::layers::ShapeIdx,
 	visuals: &egui::Visuals,
+	last_interaction_time: f64,
 ) {
 	if !output.response.has_focus() {
 		return;
@@ -1749,14 +1744,7 @@ fn paint_ltr_fallback(
 	let bottom = cursor_rect.center_bottom();
 	if ui.input(|i| i.focused) && (clip.contains(top) || clip.contains(bottom)) {
 		let painter = ui.painter().with_clip_rect(clip);
-		paint_blinking_caret(
-			ui,
-			&painter,
-			visuals,
-			top,
-			bottom,
-			output.state.last_interaction_time,
-		);
+		paint_blinking_caret(ui, &painter, visuals, top, bottom, last_interaction_time);
 	}
 }
 
@@ -1906,7 +1894,7 @@ pub(crate) fn show_text_edit(
 	id: egui::Id,
 	text: &mut dyn egui::TextBuffer,
 	multiline: bool,
-	build: impl for<'t> FnOnce(&egui::Ui, egui::TextEdit<'t>) -> egui::TextEdit<'t>,
+	build: impl for<'t> FnOnce(egui::TextEdit<'t>) -> egui::TextEdit<'t>,
 ) -> egui::text_edit::TextEditOutput {
 	let font = egui::TextStyle::Body.resolve(ui.style());
 	let color = ui.visuals().text_color();
@@ -1934,7 +1922,7 @@ pub(crate) fn show_text_edit_with_job(
 	text: &mut dyn egui::TextBuffer,
 	multiline: bool,
 	mut make_job: impl FnMut(&egui::Ui, &str, f32) -> LayoutJob,
-	build: impl for<'t> FnOnce(&egui::Ui, egui::TextEdit<'t>) -> egui::TextEdit<'t>,
+	build: impl for<'t> FnOnce(egui::TextEdit<'t>) -> egui::TextEdit<'t>,
 ) -> egui::text_edit::TextEditOutput {
 	let ctx = ui.ctx().clone();
 	let mut core = take_field_core(&ctx, id);
@@ -1985,12 +1973,6 @@ pub(crate) fn show_text_edit_with_job(
 			core.cache = Some((hash, galley.clone()));
 			galley
 		};
-	let edit = if multiline {
-		egui::TextEdit::multiline(text)
-	} else {
-		egui::TextEdit::singleline(text)
-	};
-	let edit = build(ui, edit).id(id).layouter(&mut layouter);
 	let mut output = ui
 		.scope(|ui| {
 			if hid_native {
@@ -1998,18 +1980,16 @@ pub(crate) fn show_text_edit_with_job(
 				visuals.text_cursor.stroke.color = Color32::TRANSPARENT;
 				visuals.selection.bg_fill = Color32::TRANSPARENT;
 			}
-			edit.show(ui)
+			let edit = if multiline {
+				egui::TextEdit::multiline(&mut *text)
+			} else {
+				egui::TextEdit::singleline(&mut *text)
+			};
+			build(edit).id(id).layouter(&mut layouter).show(ui)
 		})
 		.inner;
 	core.bidi_pointer(&mut output, &ctx);
-	core.finish_paint(
-		ui,
-		&mut output,
-		selection_slot,
-		hid_native,
-		&outer_visuals,
-		multiline,
-	);
+	core.finish_paint(ui, &mut output, selection_slot, hid_native, &outer_visuals);
 	put_field_core(&ctx, id, core);
 	output
 }
@@ -2043,7 +2023,7 @@ impl Layout {
 
 	/// Finish painting the composer's bidi caret/selection (or LTR fallback) and fix IME/scroll.
 	pub fn finish_paint(
-		&self,
+		&mut self,
 		ui: &mut egui::Ui,
 		output: &mut egui::text_edit::TextEditOutput,
 		slot: egui::layers::ShapeIdx,
@@ -2051,7 +2031,7 @@ impl Layout {
 		outer_visuals: &egui::Visuals,
 	) {
 		self.core
-			.finish_paint(ui, output, slot, hid_native, outer_visuals, true);
+			.finish_paint(ui, output, slot, hid_native, outer_visuals);
 	}
 }
 
@@ -2512,7 +2492,7 @@ mod tests {
 					..Default::default()
 				},
 				|ui| {
-					let _ = show_text_edit(ui, single_id, text, false, |_ui, e| e);
+					let _ = show_text_edit(ui, single_id, text, false, |e| e);
 				},
 			)
 			.drop_without_applying_deltas();

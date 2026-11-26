@@ -523,6 +523,7 @@ impl Switcher {
 						icons::inline(ui, icons::Icon::Search, 18.0, colors.muted);
 						let switcher_font = egui::FontId::proportional(16.0);
 						let switcher_color = colors.text;
+						let query_width = ui.available_width().max(60.0);
 						let input = crate::composer_text::show_text_edit_with_job(
 							ui,
 							egui::Id::unique("conversation-switcher-query"),
@@ -538,7 +539,7 @@ impl Switcher {
 								job.wrap.max_width = f32::INFINITY;
 								job
 							},
-							|ui, edit| {
+							|edit| {
 								edit.align(egui::Align2::LEFT_CENTER)
 									.event_filter(egui::EventFilter {
 										horizontal_arrows: true,
@@ -552,9 +553,10 @@ impl Switcher {
 										"switcher-show-where-would-you-like-to-go",
 									))
 									.char_limit(QUERY_CHARS)
-									.desired_width(ui.available_width().max(60.0))
+									.desired_width(query_width)
 							},
 						)
+						.response
 						.response;
 						let input =
 							input.accessible_name(crate::i18n::translate("find-conversation"));

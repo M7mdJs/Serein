@@ -361,12 +361,13 @@ impl ForumUi {
 						}
 						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
 							icons::inline(ui, icons::Icon::Search, 20.0, colors.muted);
+							let query_width = ui.available_width().max(60.0);
 							let input = crate::composer_text::show_text_edit(
 								ui,
 								ui.scope_id().with("forum-toolbar-query"),
 								&mut self.query,
 								false,
-								|ui, edit| {
+								|edit| {
 									edit.align(egui::Align2::LEFT_CENTER)
 										.char_limit(MAX_TITLE)
 										.frame(egui::Frame::NONE)
@@ -374,9 +375,10 @@ impl ForumUi {
 											"forum-toolbar-search-or-create-a-post",
 										))
 										.font(egui::TextStyle::Body)
-										.desired_width(ui.available_width().max(60.0))
+										.desired_width(query_width)
 								},
 							)
+							.response
 							.response;
 							let input = input.accessible_name(crate::i18n::translate(
 								"forum-toolbar-search-or-create-a-post",
@@ -665,7 +667,14 @@ impl ForumUi {
 									crate::text_menu::selection_for_menu(ui.ctx(), title_id());
 								let title_font =
 									egui::FontId::new(20.0, design::semibold_family(ui.ctx()));
+								let title_edit_font = title_font.clone();
 								let title_color = colors.text_strong;
+								let title_hint = design::semibold(
+									ui,
+									crate::i18n::translate("forum-composer-title"),
+									20.0,
+								)
+								.color(colors.muted);
 								let mut title = crate::composer_text::show_text_edit_with_job(
 									ui,
 									title_id(),
@@ -681,26 +690,17 @@ impl ForumUi {
 										job.wrap.max_width = f32::INFINITY;
 										job
 									},
-									|ui, edit| {
+									|edit| {
 										edit.align(egui::Align2::LEFT_CENTER)
 											.char_limit(MAX_TITLE)
 											.frame(egui::Frame::NONE)
-											.font(egui::FontId::new(
-												20.0,
-												design::semibold_family(ui.ctx()),
-											))
-											.text_color(colors.text_strong)
-											.hint_text(
-												design::semibold(
-													ui,
-													crate::i18n::translate("forum-composer-title"),
-													20.0,
-												)
-												.color(colors.muted),
-											)
+											.font(title_edit_font)
+											.text_color(title_color)
+											.hint_text(title_hint)
 											.desired_width(f32::INFINITY)
 									},
 								)
+								.response
 								.response;
 								if crate::text_menu::show(
 									&mut title,
@@ -725,7 +725,7 @@ impl ForumUi {
 									body_id(),
 									&mut draft.body,
 									true,
-									|_ui, edit| {
+									|edit| {
 										edit.char_limit(
 											MAX_CONTENT + model::message_options::PREFIX_ALLOWANCE,
 										)
@@ -741,6 +741,7 @@ impl ForumUi {
 										.desired_width(f32::INFINITY)
 									},
 								)
+								.response
 								.response;
 								if crate::text_menu::show(
 									&mut body,

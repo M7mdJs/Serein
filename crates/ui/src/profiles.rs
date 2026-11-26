@@ -3343,7 +3343,7 @@ fn message_input(
 										width,
 									)
 								},
-								|_ui, edit| {
+								|edit| {
 									edit.char_limit(client_core::MAX_CONTENT)
 										.desired_width(edit_width)
 										.desired_rows(1)

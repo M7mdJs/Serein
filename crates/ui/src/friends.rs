@@ -1003,15 +1003,16 @@ fn search(ui: &mut egui::Ui, query: &mut String, id: egui::Id, hint: &str) -> eg
 		.inner_margin(egui::Margin::symmetric(12, 6))
 		.show(ui, |ui| {
 			ui.horizontal(|ui| {
-				let edit =
-					crate::composer_text::show_text_edit(ui, id, query, false, |ui, edit| {
-						edit.align(egui::Align2::LEFT_CENTER)
-							.hint_text(hint)
-							.char_limit(128)
-							.frame(egui::Frame::NONE)
-							.desired_width((ui.available_width() - 30.0).max(40.0))
-					})
-					.response;
+				let query_width = (ui.available_width() - 30.0).max(40.0);
+				let edit = crate::composer_text::show_text_edit(ui, id, query, false, |edit| {
+					edit.align(egui::Align2::LEFT_CENTER)
+						.hint_text(hint)
+						.char_limit(128)
+						.frame(egui::Frame::NONE)
+						.desired_width(query_width)
+				})
+				.response
+				.response;
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					if query.is_empty() {
 						icons::inline(ui, Icon::Search, 18.0, colors.muted);

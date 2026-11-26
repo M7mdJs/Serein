@@ -2509,7 +2509,7 @@ pub fn bidi_input(
 	edit: impl for<'t> FnOnce(egui::TextEdit<'t>) -> egui::TextEdit<'t>,
 ) -> egui::Response {
 	let colors = palette(ui);
-	let response = crate::composer_text::show_text_edit(ui, id, text, multiline, move |_ui, e| {
+	let response = crate::composer_text::show_text_edit(ui, id, text, multiline, move |e| {
 		edit(e)
 			.desired_width(f32::INFINITY)
 			.background_color(colors.base)
@@ -2520,6 +2520,7 @@ pub fn bidi_input(
 					.inner_margin(egui::Margin::symmetric(12, 9)),
 			)
 	})
+	.response
 	.response;
 	stroke_input(ui, &colors, &response);
 	response
