@@ -997,6 +997,7 @@ impl Bidi {
 	}
 
 	/// The caret's row rect and X for logical position `index`, on the side of the char it touches.
+	#[cfg(test)]
 	fn caret(&self, index: usize) -> Option<(egui::Rect, f32)> {
 		self.caret_cursor(CCursor::new(index))
 	}
@@ -1109,6 +1110,7 @@ impl Bidi {
 	}
 
 	/// The logical position nearest `pos` (galley coordinates), on the visual side clicked.
+	#[cfg(test)]
 	fn index_at(&self, pos: egui::Pos2) -> usize {
 		self.index_at_with_bias(pos).0
 	}
@@ -1996,6 +1998,7 @@ pub(crate) fn show_text_edit_with_job(
 
 impl Layout {
 	/// Whether `text` is laid out in visual order, so the composer draws its caret and selection.
+	#[cfg(test)]
 	pub fn bidi_active(&self, text: &str) -> bool {
 		self.core.bidi_active(text)
 	}

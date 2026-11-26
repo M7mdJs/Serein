@@ -8119,6 +8119,19 @@ mod composer_tests {
 				[Command::Send { .. }]
 			));
 		}
+	}
+
+	#[test]
+	fn ime_active_clears_when_composer_loses_focus_or_modal_opens() {
+		let ctx = egui::Context::default();
+		ctx.set_os(egui::os::OperatingSystem::Nix);
+		let mut state = edit_state();
+		let mut view = MessagingUi::default();
+		ctx.run_ui(Default::default(), |ui| {
+			view.composer(ui, &mut state, Id(10), &ctx, &mut vec![]);
+			ctx.memory_mut(|m| m.request_focus(ui.make_persistent_id("message-input")));
+		})
+		.drop_without_applying_deltas();
 		// Focusing away from the composer while preediting must not leave ime_active stuck (#950).
 		let _ = edit_frame(
 			&ctx,
