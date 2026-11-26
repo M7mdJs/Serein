@@ -970,27 +970,27 @@ impl Bidi {
 	}
 
 	fn caret_local_in_row(&self, row: &BidiRow, index: usize) -> (f32, f32) {
-		if index < row.chars.end {
-			if let Some(cell) = self.cells.get(index) {
-				let x = if cell.rtl {
-					cell.left + cell.width
-				} else {
-					cell.left
-				};
-				let tie_x = cell.left + cell.width * 0.5;
-				return (x, tie_x);
-			}
+		if index < row.chars.end
+			&& let Some(cell) = self.cells.get(index)
+		{
+			let x = if cell.rtl {
+				cell.left + cell.width
+			} else {
+				cell.left
+			};
+			let tie_x = cell.left + cell.width * 0.5;
+			return (x, tie_x);
 		}
-		if index > row.chars.start {
-			if let Some(cell) = self.cells.get(index - 1) {
-				let x = if cell.rtl {
-					cell.left
-				} else {
-					cell.left + cell.width
-				};
-				let tie_x = cell.left + cell.width * 0.5;
-				return (x, tie_x);
-			}
+		if index > row.chars.start
+			&& let Some(cell) = self.cells.get(index - 1)
+		{
+			let x = if cell.rtl {
+				cell.left
+			} else {
+				cell.left + cell.width
+			};
+			let tie_x = cell.left + cell.width * 0.5;
+			return (x, tie_x);
 		}
 		let x = if row.rtl { row.rect.width() } else { 0.0 };
 		(x, x)
@@ -2408,7 +2408,7 @@ mod tests {
 			},
 			|ui| {
 				assert!(will_predict_bidi("", ui.ctx(), id));
-				let mut text = "مرحبا\r\n\u{200f}\r\nبكم".to_owned();
+				let text = "مرحبا\r\n\u{200f}\r\nبكم".to_owned();
 				let galley =
 					layout.galley(ui, &text, 300.0, &[], &[], &[], false, &mut avatars, true);
 				assert!(
@@ -2431,8 +2431,6 @@ mod tests {
 					assert!(bidi.caret(i).is_some(), "caret exists at char {i}");
 				}
 				assert!(will_predict_bidi(&text, ui.ctx(), id));
-				text.clear();
-				let _ = text;
 			},
 		)
 		.drop_without_applying_deltas();

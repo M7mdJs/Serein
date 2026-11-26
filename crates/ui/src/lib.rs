@@ -4047,9 +4047,7 @@ impl MessagingUi {
 							egui::ImeEvent::Preedit { text, .. } => {
 								self.ime_active = !text.is_empty()
 							}
-							egui::ImeEvent::Commit(_) | egui::ImeEvent::Disabled => {
-								self.ime_active = false
-							}
+							egui::ImeEvent::Commit(_) => self.ime_active = false,
 							_ => {}
 						}
 					}

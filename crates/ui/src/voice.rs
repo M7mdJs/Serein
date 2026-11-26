@@ -120,9 +120,9 @@ impl MessagingUi {
 		let overlay = egui::Modal::new(id)
 			.area(
 				egui::Modal::default_area(id)
+					.constrain_to(screen)
 					.anchor(egui::Align2::LEFT_TOP, egui::Vec2::ZERO)
-					.fixed_size(screen.size())
-					.constrain(false)
+					.default_size(screen.size())
 					.fade_in(false),
 			)
 			.backdrop_color(STAGE_FILL)
@@ -7192,35 +7192,10 @@ mod tests {
 	#[test]
 	fn camera_fullscreen_and_fit_rect_preserve_video_without_cropping() {
 		let ctx = egui::Context::default();
-		let mut state = test_support::demo_state();
-		let channel = state.channels.iter().find(|c| c.kind == 2).unwrap().id;
-		let peer_id = Id(777);
-		state.voice.active = Some(client_core::voice::ActiveCall {
-			channel,
-			request: 1,
-			phase: Phase::Connected,
-			muted: false,
-			deafened: false,
-			server_muted: false,
-			server_deafened: false,
-			camera: false,
-			watching: None,
-			screen_sharing: false,
-			ringing: Vec::new(),
-			participants: Vec::new(),
-			speaking: Vec::new(),
-		});
-		state.voice.roster.push(model::VoiceState {
-			channel,
-			user: peer_id,
-			muted: true,
-			deafened: true,
-			server_muted: false,
-			server_deafened: false,
-			speaking: false,
-			streaming: false,
-			video: true,
-		});
+		let mut state = test_support::call_demo_state();
+		let channel = state.voice.active.as_ref().unwrap().channel;
+		let peer_id = Id(2);
+		state.voice.active.as_mut().unwrap().participants[1].video = true;
 		let mut view = MessagingUi::default();
 		let texture = ctx.load_texture(
 			"peer-cam",
@@ -7243,7 +7218,7 @@ mod tests {
 		);
 		assert!(fitted.width() <= 100.01 && fitted.height() <= 60.0);
 		// Stopping remote video exits camera fullscreen validation.
-		state.voice.roster.last_mut().unwrap().video = false;
+		state.voice.active.as_mut().unwrap().participants[1].video = false;
 		assert_eq!(view.voice_fullscreen_channel(&state), None);
 	}
 }
