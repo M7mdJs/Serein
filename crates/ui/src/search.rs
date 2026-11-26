@@ -236,19 +236,28 @@ impl SearchUi {
 				ui.set_height(28.0);
 				ui.horizontal_centered(|ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
-					let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, width: f32| {
-						let job = filters::highlight(ui, text.as_str(), width);
-						ui.fonts_mut(|fonts| fonts.layout_job(job))
-					};
-					let output = egui::TextEdit::singleline(&mut self.query)
-						.align(egui::Align2::LEFT_CENTER)
-						.id_salt("conversation-search-query")
-						.char_limit(256)
-						.frame(egui::Frame::NONE)
-						.hint_text(RichText::new(hint).color(colors.muted))
-						.layouter(&mut layouter)
-						.desired_width((ui.available_width() - 28.0).max(30.0))
-						.show(ui);
+					let hint_widget =
+						egui::WidgetText::from(crate::composer_text::singleline_galley(
+							ui,
+							hint,
+							egui::TextStyle::Body.resolve(ui.style()),
+							colors.muted,
+							(ui.available_width() - 28.0).max(30.0),
+						));
+					let output = crate::composer_text::show_text_edit_with_job(
+						ui,
+						ui.make_persistent_id("conversation-search-query"),
+						&mut self.query,
+						false,
+						|ui, value, width| filters::highlight(ui, value, width),
+						|ui, edit| {
+							edit.align(egui::Align2::LEFT_CENTER)
+								.char_limit(256)
+								.frame(egui::Frame::NONE)
+								.hint_text(hint_widget)
+								.desired_width((ui.available_width() - 28.0).max(30.0))
+						},
+					);
 					let input = output
 						.response
 						.response

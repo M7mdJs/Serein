@@ -66,14 +66,18 @@ impl ForumSettingsUi {
 		let demo = state.demo;
 		ui.add_space(14.0);
 		let label = dialog::label(ui, "forum-settings-show-post-guidelines");
-		let topic = dialog::input(
+		let topic = dialog::bidi_input(
 			ui,
-			egui::TextEdit::multiline(&mut draft.topic)
-				.hint_text(crate::i18n::translate(
+			ui.scope_id().with("forum-settings-guidelines"),
+			&mut draft.topic,
+			true,
+			|edit| {
+				edit.hint_text(crate::i18n::translate(
 					"forum-settings-show-let-everyone-know-how-to-use-this-channel",
 				))
 				.char_limit(4096)
-				.desired_rows(5),
+				.desired_rows(5)
+			},
 		)
 		.labelled_by(label.id);
 		if topic.changed() {

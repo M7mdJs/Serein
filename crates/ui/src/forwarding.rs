@@ -79,13 +79,16 @@ impl ForwardDialog {
 		.width(480.0)
 		.show(ctx, |d| {
 			d.content(|ui| {
-				let input = design::input(
+				let input = design::bidi_input(
 					ui,
-					egui::TextEdit::singleline(&mut self.query)
-						.align(egui::Align2::LEFT_CENTER)
-						.hint_text(crate::i18n::translate("forwarding-show-search"))
-						.char_limit(256)
-						.desired_width(f32::INFINITY),
+					ui.scope_id().with("forward-search-query"),
+					&mut self.query,
+					false,
+					|edit| {
+						edit.align(egui::Align2::LEFT_CENTER)
+							.hint_text(crate::i18n::translate("forwarding-show-search"))
+							.char_limit(256)
+					},
 				);
 				if std::mem::take(&mut self.focus) {
 					input.request_focus();
@@ -226,17 +229,21 @@ impl ForwardDialog {
 				}
 				ui.add_space(8.0);
 				ui.add_enabled_ui(!submitted, |ui| {
-					design::input(
+					design::bidi_input(
 						ui,
-						egui::TextEdit::singleline(&mut self.note)
-							.align(egui::Align2::LEFT_CENTER)
-							.hint_text(crate::i18n::translate(
-								"forwarding-show-add-an-optional-message",
-							))
-							.char_limit(
-								client_core::MAX_CONTENT + model::message_options::PREFIX_ALLOWANCE,
-							)
-							.desired_width(f32::INFINITY),
+						ui.scope_id().with("forward-optional-note"),
+						&mut self.note,
+						false,
+						|edit| {
+							edit.align(egui::Align2::LEFT_CENTER)
+								.hint_text(crate::i18n::translate(
+									"forwarding-show-add-an-optional-message",
+								))
+								.char_limit(
+									client_core::MAX_CONTENT
+										+ model::message_options::PREFIX_ALLOWANCE,
+								)
+						},
 					)
 				});
 				if let Some(error) = self.error {

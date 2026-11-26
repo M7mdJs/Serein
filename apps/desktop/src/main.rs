@@ -7538,7 +7538,9 @@ impl eframe::App for Desktop {
 			}
 		}
 		#[cfg(target_os = "windows")]
-		if self.window.is_decorated() != self.messaging.hide_title_bar {
+		if self.window.fullscreen().is_none()
+			&& self.window.is_decorated() != self.messaging.hide_title_bar
+		{
 			self.window.set_decorations(self.messaging.hide_title_bar);
 			align_undecorated_surface(&self.window);
 		}
@@ -7723,7 +7725,8 @@ impl eframe::App for Desktop {
 		}
 		ui::design::window_resize_if(
 			&ctx,
-			cfg!(target_os = "windows") || self.messaging.uses_custom_title_bar(),
+			self.window.fullscreen().is_none()
+				&& (cfg!(target_os = "windows") || self.messaging.uses_custom_title_bar()),
 		);
 		#[cfg(target_os = "linux")]
 		self.round_window_corners(&ctx, frame);

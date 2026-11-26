@@ -21,7 +21,7 @@ use egui::{Color32, RichText, Stroke};
 
 // Dialog-flavoured names for the shared primitives, so call sites read as dialog chrome.
 pub use crate::design::{ButtonKind as Action, button as action};
-pub use crate::design::{Level, hint, input, label, notice};
+pub use crate::design::{Level, bidi_input, hint, input, label, notice};
 
 /// Corner radius of a dialog surface.
 pub const RADIUS: u8 = 16;

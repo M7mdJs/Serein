@@ -175,6 +175,35 @@ fn catalog_index(key: &str) -> Option<usize> {
 		.copied()
 }
 
+/// Look up a bundled Unicode emoji by its Discord `:shortcode:` or alias (without colons).
+pub(crate) fn shortcode(name: &str) -> Option<&'static str> {
+	static INDEX: OnceLock<std::collections::HashMap<&'static str, &'static str>> = OnceLock::new();
+	let map = INDEX.get_or_init(|| {
+		let mut index = std::collections::HashMap::new();
+		for ((text, _), (_, primary, aliases)) in standard().iter().zip(discord_names()) {
+			index.entry(*primary).or_insert(*text);
+			for alias in aliases.split(',') {
+				if !alias.is_empty() {
+					index.entry(alias).or_insert(*text);
+				}
+			}
+		}
+		index
+	});
+	if !name.is_ascii() || name.is_empty() || name.len() > 64 {
+		return None;
+	}
+	if name.bytes().all(|b| !b.is_ascii_uppercase()) {
+		return map.get(name).copied();
+	}
+	let mut lower = [0u8; 64];
+	for (dst, src) in lower.iter_mut().zip(name.bytes()) {
+		*dst = src.to_ascii_lowercase();
+	}
+	let key = std::str::from_utf8(&lower[..name.len()]).ok()?;
+	map.get(key).copied()
+}
+
 /// The account frecency key: a custom emoji id or, unverified, the Discord name.
 fn frecency_key(used: Used) -> Option<String> {
 	match used {
@@ -526,17 +555,22 @@ impl Picker {
 			.show(|ui| {
 				ui.set_width(280.0);
 				let colors = crate::design::palette(ui);
-				if ui
-					.add(
-						egui::TextEdit::singleline(&mut self.query)
-							.align(egui::Align2::LEFT_CENTER)
+				if crate::composer_text::show_text_edit(
+					ui,
+					ui.scope_id().with("emoji-picker-search"),
+					&mut self.query,
+					false,
+					|_ui, edit| {
+						edit.align(egui::Align2::LEFT_CENTER)
 							.hint_text(crate::i18n::translate(
 								"emoji-picker-unicode-button-with-search-emoji",
 							))
 							.char_limit(64)
-							.desired_width(f32::INFINITY),
-					)
-					.changed()
+							.desired_width(f32::INFINITY)
+					},
+				)
+				.response
+				.changed()
 				{
 					self.filter();
 				}

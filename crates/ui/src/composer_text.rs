@@ -22,13 +22,20 @@ struct Inline {
 }
 
 #[derive(Default)]
-pub(crate) struct Layout {
-	inlines: Vec<Inline>,
+struct BidiCore {
 	cache: Option<(u64, Arc<egui::Galley>)>,
-	demo: bool,
 	bidi: Option<Bidi>,
 	/// The pointer gesture in progress over a right-to-left draft.
 	bidi_gesture: Option<Gesture>,
+	/// Preferred visual X (galley coordinates) across consecutive Up/Down steps.
+	preferred_x: Option<f32>,
+}
+
+#[derive(Default)]
+pub(crate) struct Layout {
+	inlines: Vec<Inline>,
+	core: BidiCore,
+	demo: bool,
 }
 
 /// A press selects from a char; a double-click selects whole words while the button is held.
@@ -83,6 +90,15 @@ struct BidiRow {
 	chars: Range<usize>,
 	rect: egui::Rect,
 	rtl: bool,
+	ends_with_newline: bool,
+}
+
+#[derive(Clone, Copy)]
+struct VisualStop {
+	index: usize,
+	x: f32,
+	tie_x: f32,
+	prefer_next_row: bool,
 }
 
 /// True when `text` has right-to-left letters, so the composer lays it out in visual order.
@@ -96,6 +112,7 @@ pub(crate) fn has_rtl(text: &str) -> bool {
 }
 
 /// Whether the paragraph holding char `index` of `text` reads right to left.
+#[cfg(test)]
 pub(crate) fn paragraph_rtl(text: &str, index: usize) -> bool {
 	let byte = text
 		.char_indices()
@@ -195,7 +212,7 @@ impl Layout {
 		}
 		mass_mentions.hash(&mut key);
 		let key = key.finish();
-		if let Some((cached, galley)) = &self.cache
+		if let Some((cached, galley)) = &self.core.cache
 			&& *cached == key
 		{
 			return galley.clone();
@@ -298,11 +315,8 @@ impl Layout {
 				grapheme.len()
 			};
 			let label = label.map(|(text, color)| {
-				let mut job = LayoutJob::simple_singleline(text, font.clone(), color);
-				job.wrap.max_width =
-					(width - 6.0 - if icon.is_some() { size } else { 0.0 }).max(1.0);
-				job.wrap.max_rows = 1;
-				ui.fonts_mut(|f| f.layout_job(job))
+				let chip_max = (width - 6.0 - if icon.is_some() { size } else { 0.0 }).max(1.0);
+				singleline_galley(ui, text, font.clone(), color, chip_max)
 			});
 			let raw = &tail[..length];
 			let count = raw.chars().count();
@@ -337,8 +351,8 @@ impl Layout {
 			.then(|| reorder(ui, &mut galley, width))
 			.flatten();
 		if self.inlines.is_empty() {
-			self.bidi = reordered.map(|(cells, rtl)| Bidi::new(cells, &rtl, &galley, &[]));
-			self.cache = Some((key, galley.clone()));
+			self.core.bidi = reordered.map(|(cells, rtl)| Bidi::new(cells, &rtl, &galley, &[]));
+			self.core.cache = Some((key, galley.clone()));
 			return galley;
 		}
 		let galley_mut = Arc::make_mut(&mut galley);
@@ -350,11 +364,15 @@ impl Layout {
 			let mut glyphs = Vec::with_capacity(row.glyphs.len());
 			for glyph in &row.glyphs {
 				if let Some(inline) = self.inlines.get(next).filter(|i| i.projected == projected) {
+					let left = reordered
+						.as_ref()
+						.and_then(|(cells, _)| cells.get(projected))
+						.map_or(glyph.pos.x, |cell| cell.left);
 					let count = inline.source.len();
 					for (index, chr) in chars[inline.source.clone()].iter().enumerate() {
 						let mut slot = *glyph;
 						slot.chr = *chr;
-						slot.pos.x = glyph.pos.x + inline.width * index as f32 / count as f32;
+						slot.pos.x = left + inline.width * index as f32 / count as f32;
 						slot.advance_width = inline.width / count as f32;
 						glyphs.push(slot);
 					}
@@ -369,8 +387,9 @@ impl Layout {
 		}
 		// TextEdit's galley and TextBuffer must expose exactly the same original characters.
 		galley_mut.job = Arc::new(LayoutJob::simple(text.to_owned(), font, colors.text, width));
-		self.bidi = reordered.map(|(cells, rtl)| Bidi::new(cells, &rtl, &galley, &self.inlines));
-		self.cache = Some((key, galley.clone()));
+		self.core.bidi =
+			reordered.map(|(cells, rtl)| Bidi::new(cells, &rtl, &galley, &self.inlines));
+		self.core.cache = Some((key, galley.clone()));
 		galley
 	}
 
@@ -382,6 +401,7 @@ impl Layout {
 	) {
 		// TextEdit keeps the empty hint galley on the first keystroke.
 		if self
+			.core
 			.cache
 			.as_ref()
 			.is_none_or(|(_, galley)| galley.job.text != output.galley.job.text)
@@ -392,16 +412,27 @@ impl Layout {
 		let clip = output.text_clip_rect.intersect(ui.clip_rect());
 		let painter = ui.painter().with_clip_rect(clip);
 		for inline in &self.inlines {
-			let mut cursor = CCursor::new(inline.source.start);
-			cursor.prefer_next_row = true;
-			let position = output
-				.galley
-				.pos_from_cursor(cursor)
-				.translate(output.galley_pos.to_vec2());
-			let rect = egui::Rect::from_min_size(
-				position.min,
-				egui::vec2(inline.width, position.height()),
-			);
+			let rect = if let Some(bidi) = &self.core.bidi
+				&& let Some(row) = bidi
+					.rows
+					.iter()
+					.find(|row| row.chars.contains(&inline.source.start))
+				&& let Some(cell) = bidi.cells.get(inline.source.start)
+			{
+				egui::Rect::from_min_size(
+					egui::pos2(row.rect.left() + cell.left, row.rect.top()),
+					egui::vec2(inline.width, row.rect.height()),
+				)
+				.translate(output.galley_pos.to_vec2())
+			} else {
+				let mut cursor = CCursor::new(inline.source.start);
+				cursor.prefer_next_row = true;
+				let position = output
+					.galley
+					.pos_from_cursor(cursor)
+					.translate(output.galley_pos.to_vec2());
+				egui::Rect::from_min_size(position.min, egui::vec2(inline.width, position.height()))
+			};
 			if !rect.intersect(clip).is_positive() {
 				continue;
 			}
@@ -464,15 +495,19 @@ impl Layout {
 			return;
 		};
 		let original = range;
-		let direction = ctx.input(|i| {
-			if i.key_pressed(egui::Key::ArrowLeft) {
-				-1
-			} else if i.key_pressed(egui::Key::ArrowRight) {
-				1
-			} else {
-				0
-			}
-		});
+		let direction = if self.core.bidi.is_some() {
+			0
+		} else {
+			ctx.input(|i| {
+				if i.key_pressed(egui::Key::ArrowLeft) {
+					-1
+				} else if i.key_pressed(egui::Key::ArrowRight) {
+					1
+				} else {
+					0
+				}
+			})
+		};
 		for cursor in [&mut range.primary, &mut range.secondary] {
 			for inline in &self.inlines {
 				let index = cursor.index.0;
@@ -544,7 +579,7 @@ fn reorder(
 	let job = galley.job.clone();
 	let text = job.text.as_str();
 	let bidi = unicode_bidi::BidiInfo::new(text, None);
-	if !bidi.has_rtl() || text.contains('\r') {
+	if !bidi.has_rtl() {
 		return None;
 	}
 	let offsets: Vec<usize> = text
@@ -557,6 +592,32 @@ fn reorder(
 	let mut directions = Vec::new();
 	let mut rows = Vec::new();
 	let mut y = 0.0;
+	let mut fallback_glyph = galley
+		.rows
+		.iter()
+		.flat_map(|row| row.row.glyphs.iter())
+		.next()
+		.copied();
+	let template_for = |ui: &egui::Ui,
+	                    fallback: &mut Option<egui::epaint::text::Glyph>,
+	                    row: &egui::epaint::text::Row| {
+		if let Some(first) = row.glyphs.first().copied() {
+			*fallback = Some(first);
+			return first;
+		}
+		*fallback.get_or_insert_with(|| {
+			let format = job
+				.sections
+				.first()
+				.map(|section| section.format.clone())
+				.unwrap_or_default();
+			let mut space = LayoutJob::default();
+			space.append(" ", 0.0, format);
+			ui.fonts_mut(|fonts| fonts.layout_job(space)).rows[0]
+				.row
+				.glyphs[0]
+		})
+	};
 	let mut place = |row: egui::epaint::text::Row, rtl: bool, ends_with_newline: bool| {
 		let x = if rtl && width.is_finite() {
 			(width - row.size.x).max(0.0)
@@ -577,22 +638,38 @@ fn reorder(
 		let line = hard_start..hard_start + hard.len();
 		hard_start = line.end + 1;
 		let ends_with_newline = line.end < text.len();
+		let cr = usize::from(hard.ends_with('\r'));
+		let content_end = line.end - cr;
 		let paragraph = paragraph_at(&bidi, line.start)?;
 		let rtl = paragraph.level.is_rtl();
-		if line.is_empty() {
-			let (row, _) = shape_line(ui, &job, &bidi, paragraph, line);
+		if line.start >= content_end {
+			let (mut row, _) = shape_line(ui, &job, &bidi, line.start..line.start);
+			if cr == 1 {
+				let cr_char = char_at(content_end);
+				cells[cr_char] = Cell {
+					left: 0.0,
+					width: 0.0,
+					rtl,
+				};
+				let mut glyph = template_for(ui, &mut fallback_glyph, &row);
+				glyph.chr = '\r';
+				glyph.pos.x = 0.0;
+				glyph.advance_width = 0.0;
+				glyph.first_vertex = row.visuals.glyph_vertex_range.end as u32;
+				row.glyphs = vec![glyph];
+			}
 			place(row, rtl, ends_with_newline);
 			continue;
 		}
 		// Advances of the whole hard line choose the logical breaks; rows are shaped again.
-		let (_, measured) = shape_line(ui, &job, &bidi, paragraph, line.clone());
+		let (_, measured) = shape_line(ui, &job, &bidi, line.start..content_end);
 		let mut advances: Vec<(Range<usize>, f32)> = measured
 			.into_iter()
 			.map(|(range, rect, _)| (range, rect.width()))
 			.collect();
 		advances.sort_by_key(|(range, _)| range.start);
 		let mut start = line.start;
-		while start < line.end {
+		while start < content_end {
 			let mut end = start;
 			let mut used = 0.0;
 			let mut word = None;
@@ -606,24 +683,24 @@ fn reorder(
 					word = Some(end);
 				}
 			}
-			if end < line.end
+			if end < content_end
 				&& let Some(word) = word
 			{
 				end = word;
 			}
 			if end <= start {
-				// A cluster wider than the composer still gets its own row.
-				end = text[start..]
-					.chars()
+				// A cluster/grapheme wider than the input still gets its own row without splitting marks.
+				end = text[start..content_end]
+					.graphemes(true)
 					.next()
-					.map_or(line.end, |c| start + c.len_utf8());
+					.map_or(content_end, |g| start + g.len());
 			}
-			let (mut row, clusters) = shape_line(ui, &job, &bidi, paragraph, start..end);
-			for (range, rect, rtl) in clusters {
+			let (mut row, clusters) = shape_line(ui, &job, &bidi, start..end);
+			for (range, rect, cluster_rtl) in clusters {
 				let chars = char_at(range.start)..char_at(range.end);
 				let share = rect.width() / chars.len().max(1) as f32;
 				for (index, char) in chars.enumerate() {
-					let left = if rtl {
+					let left = if cluster_rtl {
 						rect.max.x - share * (index + 1) as f32
 					} else {
 						rect.min.x + share * index as f32
@@ -631,38 +708,56 @@ fn reorder(
 					cells[char] = Cell {
 						left,
 						width: share,
-						rtl,
+						rtl: cluster_rtl,
 					};
 				}
 			}
-			let template = row.glyphs.first().copied();
+			let at_line_end = end >= content_end;
+			let row_end = if at_line_end { line.end } else { end };
+			if at_line_end && cr == 1 {
+				let cr_char = char_at(content_end);
+				let cr_left = if rtl { 0.0 } else { row.size.x };
+				cells[cr_char] = Cell {
+					left: cr_left,
+					width: 0.0,
+					rtl,
+				};
+			}
+			let template = template_for(ui, &mut fallback_glyph, &row);
 			let glyph_end = row.visuals.glyph_vertex_range.end as u32;
-			row.glyphs = template
-				.map(|template| {
-					text[start..end]
-						.chars()
-						.zip(&cells[char_at(start)..char_at(end)])
-						.map(|(chr, cell)| {
-							let mut glyph = template;
-							glyph.chr = chr;
-							glyph.pos.x = cell.left;
-							glyph.advance_width = cell.width;
-							// egui recolours selected glyphs by vertex order; the composer
-							// paints the selection itself.
-							glyph.first_vertex = glyph_end;
-							glyph
-						})
-						.collect()
+			row.glyphs = text[start..row_end]
+				.chars()
+				.zip(&cells[char_at(start)..char_at(row_end)])
+				.map(|(chr, cell)| {
+					let mut glyph = template;
+					glyph.chr = chr;
+					// Caret X inside the cell so egui's scroll/IME follow the true visual caret.
+					glyph.pos.x = if cell.rtl {
+						cell.left + cell.width
+					} else {
+						cell.left
+					};
+					glyph.advance_width = cell.width;
+					// egui recolours selected glyphs by vertex order; the composer
+					// paints the selection itself.
+					glyph.first_vertex = glyph_end;
+					glyph
 				})
-				.unwrap_or_default();
+				.collect();
 			start = end;
-			place(row, rtl, ends_with_newline && start >= line.end);
+			place(row, rtl, ends_with_newline && start >= content_end);
 		}
 	}
 	let galley_mut = Arc::make_mut(galley);
-	galley_mut.rect = rows.iter().fold(egui::Rect::NOTHING, |rect, placed| {
+	let mut rect = rows.iter().fold(egui::Rect::NOTHING, |rect, placed| {
 		rect.union(egui::Rect::from_min_size(placed.pos, placed.row.size))
 	});
+	// Right-aligned RTL rows start at `placed.pos.x > 0`; keep `rect.min.x = 0.0` so
+	// `TextEdit` (which subtracts `galley.rect.left()`) and `paint_bidi` (`galley_pos`) agree.
+	if rect.is_finite() && rect.min.x > 0.0 {
+		rect.min.x = 0.0;
+	}
+	galley_mut.rect = rect;
 	galley_mut.mesh_bounds = rows.iter().fold(egui::Rect::NOTHING, |rect, placed| {
 		rect.union(
 			placed
@@ -679,13 +774,12 @@ fn reorder(
 	Some((cells, directions))
 }
 
-/// Shape `line` (job bytes inside one bidi paragraph) as one visual-order line. Returns its row
-/// and each native cluster's job bytes, row-local rect and direction.
+/// Shape `line` (job bytes) as one visual-order line. Splits on paragraph boundaries safely so
+/// pasted separators like U+2029 or stray `\r` never panic or leak tofu glyphs.
 fn shape_line(
 	ui: &egui::Ui,
 	job: &LayoutJob,
 	bidi: &unicode_bidi::BidiInfo<'_>,
-	paragraph: &unicode_bidi::ParagraphInfo,
 	line: Range<usize>,
 ) -> (
 	egui::epaint::text::Row,
@@ -696,6 +790,7 @@ fn shape_line(
 	let mut shaped = LayoutJob::default();
 	let mut pieces = Vec::new();
 	let mut directions = Vec::new();
+	let default_rtl = paragraph_at(bidi, line.start).is_some_and(|p| p.level.is_rtl());
 	if line.is_empty() {
 		// An empty row still takes the height of the text around it.
 		let format = job
@@ -708,40 +803,85 @@ fn shape_line(
 			byte_range: ByteIndex(0)..ByteIndex(0),
 			format,
 		});
-		directions.push(paragraph.level.is_rtl());
+		directions.push(default_rtl);
 	} else {
-		let (levels, runs) = bidi.visual_runs(paragraph, line);
-		for run in runs {
-			let rtl = levels[run.start].is_rtl();
-			let mut parts: Vec<_> = job
+		let mut pos = line.start;
+		while pos < line.end {
+			let Some(paragraph) = paragraph_at(bidi, pos) else {
+				break;
+			};
+			let sub_end = line.end.min(paragraph.range.end).max(pos);
+			let (levels, runs) = bidi.visual_runs(paragraph, pos..sub_end);
+			for run in runs {
+				let rtl = levels[run.start].is_rtl();
+				let mut parts: Vec<_> = job
+					.sections
+					.iter()
+					.filter_map(|section| {
+						let from = run.start.max(section.byte_range.start.0);
+						let to = run.end.min(section.byte_range.end.0);
+						(from < to).then_some((from..to, &section.format))
+					})
+					.flat_map(|(range, format)| {
+						crate::rtl::script_parts(text, range)
+							.into_iter()
+							.map(move |range| (range, format))
+					})
+					.collect();
+				if rtl {
+					parts.reverse();
+				}
+				for (range, format) in parts {
+					// Strip any bare internal `\r` while keeping source byte slices intact.
+					let mut slice_start = range.start;
+					for (rel, _) in text[range.clone()].match_indices('\r') {
+						let cr_at = range.start + rel;
+						if cr_at > slice_start {
+							let piece_range = slice_start..cr_at;
+							let from = shaped.text.len();
+							shaped.text.push_str(&text[piece_range.clone()]);
+							shaped.sections.push(LayoutSection {
+								leading_space: 0.0,
+								byte_range: ByteIndex(from)..ByteIndex(shaped.text.len()),
+								format: format.clone(),
+							});
+							directions.push(rtl);
+							pieces.push((piece_range, from, rtl));
+						}
+						slice_start = cr_at + 1;
+					}
+					if slice_start < range.end {
+						let piece_range = slice_start..range.end;
+						let from = shaped.text.len();
+						shaped.text.push_str(&text[piece_range.clone()]);
+						// append() merges equal formats and would erase a bidi boundary.
+						shaped.sections.push(LayoutSection {
+							leading_space: 0.0,
+							byte_range: ByteIndex(from)..ByteIndex(shaped.text.len()),
+							format: format.clone(),
+						});
+						directions.push(rtl);
+						pieces.push((piece_range, from, rtl));
+					}
+				}
+			}
+			if sub_end >= line.end {
+				break;
+			}
+			pos = sub_end;
+		}
+		if shaped.sections.is_empty() {
+			let format = job
 				.sections
-				.iter()
-				.filter_map(|section| {
-					let from = run.start.max(section.byte_range.start.0);
-					let to = run.end.min(section.byte_range.end.0);
-					(from < to).then_some((from..to, &section.format))
-				})
-				.flat_map(|(range, format)| {
-					crate::rtl::script_parts(text, range)
-						.into_iter()
-						.map(move |range| (range, format))
-				})
-				.collect();
-			if rtl {
-				parts.reverse();
-			}
-			for (range, format) in parts {
-				let from = shaped.text.len();
-				shaped.text.push_str(&text[range.clone()]);
-				// append() merges equal formats and would erase a bidi boundary.
-				shaped.sections.push(LayoutSection {
-					leading_space: 0.0,
-					byte_range: ByteIndex(from)..ByteIndex(shaped.text.len()),
-					format: format.clone(),
-				});
-				directions.push(rtl);
-				pieces.push((range, from, rtl));
-			}
+				.first()
+				.map(|section| section.format.clone())
+				.unwrap_or_default();
+			shaped.sections.push(LayoutSection {
+				leading_space: 0.0,
+				byte_range: ByteIndex(0)..ByteIndex(0),
+				format,
+			});
+			directions.push(default_rtl);
 		}
 	}
 	let native = ui.fonts_mut(|fonts| fonts.layout_single_line_with_clusters(shaped, &directions));
@@ -784,69 +924,554 @@ impl Bidi {
 				chars: start..end,
 				rect: egui::Rect::from_min_size(placed.pos, placed.row.size),
 				rtl: *rtl,
+				ends_with_newline: placed.ends_with_newline,
 			});
 			start = end + usize::from(placed.ends_with_newline);
 		}
 		Self { cells, rows }
 	}
 
-	/// The caret's x for logical position `index`, on the side of the char it touches.
-	fn caret(&self, index: usize) -> Option<(egui::Rect, f32)> {
-		let row = self
-			.rows
-			.iter()
-			.find(|row| row.chars.contains(&index) || row.chars.end == index)?;
-		let x = if index < row.chars.end {
-			let cell = self.cells.get(index)?;
-			if cell.rtl {
-				cell.left + cell.width
-			} else {
-				cell.left
+	fn row_index_for_cursor(&self, cursor: CCursor) -> Option<usize> {
+		let index = cursor.index.0;
+		let mut soft_prev = None;
+		for (ri, row) in self.rows.iter().enumerate() {
+			if row.chars.start <= index && index < row.chars.end {
+				if let Some(prev_ri) = soft_prev
+					&& !cursor.prefer_next_row
+				{
+					return Some(prev_ri);
+				}
+				return Some(ri);
 			}
-		} else if index > row.chars.start {
-			let cell = self.cells.get(index - 1)?;
-			if cell.rtl {
-				cell.left
-			} else {
-				cell.left + cell.width
+			if row.chars.end == index {
+				if !row.ends_with_newline
+					&& self
+						.rows
+						.get(ri + 1)
+						.is_some_and(|next| next.chars.start == index)
+				{
+					soft_prev = Some(ri);
+				} else {
+					return Some(ri);
+				}
 			}
-		} else if row.rtl {
-			row.rect.width()
-		} else {
-			0.0
-		};
-		Some((row.rect, row.rect.left() + x))
+		}
+		soft_prev.or_else(|| (!self.rows.is_empty()).then_some(self.rows.len() - 1))
 	}
 
-	/// The logical position nearest `pos` (galley coordinates), on the visual side clicked.
-	fn index_at(&self, pos: egui::Pos2) -> usize {
-		let Some(row) = self.rows.iter().min_by(|a, b| {
+	fn caret_in_row(&self, ri: usize, index: usize) -> Option<(egui::Rect, f32)> {
+		let row = self.rows.get(ri)?;
+		let (local_x, _) = self.caret_local_in_row(row, index);
+		Some((row.rect, row.rect.left() + local_x))
+	}
+
+	fn caret_local_in_row(&self, row: &BidiRow, index: usize) -> (f32, f32) {
+		if index < row.chars.end {
+			if let Some(cell) = self.cells.get(index) {
+				let x = if cell.rtl {
+					cell.left + cell.width
+				} else {
+					cell.left
+				};
+				let tie_x = cell.left + cell.width * 0.5;
+				return (x, tie_x);
+			}
+		}
+		if index > row.chars.start {
+			if let Some(cell) = self.cells.get(index - 1) {
+				let x = if cell.rtl {
+					cell.left
+				} else {
+					cell.left + cell.width
+				};
+				let tie_x = cell.left + cell.width * 0.5;
+				return (x, tie_x);
+			}
+		}
+		let x = if row.rtl { row.rect.width() } else { 0.0 };
+		(x, x)
+	}
+
+	/// The caret's row rect and X for logical position `index`, on the side of the char it touches.
+	fn caret(&self, index: usize) -> Option<(egui::Rect, f32)> {
+		self.caret_cursor(CCursor::new(index))
+	}
+
+	/// Soft-wrap aware caret geometry respecting `CCursor::prefer_next_row`.
+	fn caret_cursor(&self, cursor: CCursor) -> Option<(egui::Rect, f32)> {
+		let ri = self.row_index_for_cursor(cursor)?;
+		self.caret_in_row(ri, cursor.index.0)
+	}
+
+	/// Visual left-to-right stops on `row`, keeping inline chips atomic and breaking dual-caret ties
+	/// using each boundary's adjacent cell midpoint.
+	fn visual_stops(&self, ri: usize, inlines: &[Inline]) -> Vec<VisualStop> {
+		let row = &self.rows[ri];
+		let mut stops = Vec::with_capacity(row.chars.len() + 1);
+		for idx in row.chars.start..=row.chars.end {
+			if inlines
+				.iter()
+				.any(|inline| inline.source.start < idx && idx < inline.source.end)
+			{
+				continue;
+			}
+			// Do not stop between trailing `\r` and `\n`; keep the caret before `\r`.
+			if idx == row.chars.end
+				&& row.chars.end > row.chars.start
+				&& self.cells.get(idx - 1).is_some_and(|c| c.width == 0.0)
+			{
+				continue;
+			}
+			let (local_x, tie_local) = self.caret_local_in_row(row, idx);
+			let prefer_next_row = idx == row.chars.start;
+			stops.push(VisualStop {
+				index: idx,
+				x: row.rect.left() + local_x,
+				tie_x: row.rect.left() + tie_local,
+				prefer_next_row,
+			});
+		}
+		if stops.is_empty() {
+			let x = row.rect.left() + if row.rtl { row.rect.width() } else { 0.0 };
+			stops.push(VisualStop {
+				index: row.chars.start,
+				x,
+				tie_x: x,
+				prefer_next_row: true,
+			});
+		}
+		stops.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.tie_x.total_cmp(&b.tie_x)));
+		stops
+	}
+
+	fn snap_out_of_inline(&self, mut index: usize, forward: bool, inlines: &[Inline]) -> usize {
+		for inline in inlines {
+			if inline.source.start < index && index < inline.source.end {
+				index = if forward {
+					inline.source.end
+				} else {
+					inline.source.start
+				};
+				break;
+			}
+		}
+		index
+	}
+
+	fn local_rtl(&self, ri: usize, index: usize) -> bool {
+		let row = &self.rows[ri];
+		if index < row.chars.end
+			&& let Some(cell) = self.cells.get(index)
+		{
+			return cell.rtl;
+		}
+		if index > row.chars.start
+			&& let Some(cell) = self.cells.get(index - 1)
+		{
+			return cell.rtl;
+		}
+		row.rtl
+	}
+
+	fn index_at_with_bias(&self, pos: egui::Pos2) -> (usize, bool) {
+		let Some((ri, row)) = self.rows.iter().enumerate().min_by(|(_, a), (_, b)| {
 			let distance =
 				|row: &BidiRow| (pos.y - pos.y.clamp(row.rect.top(), row.rect.bottom())).abs();
 			distance(a).total_cmp(&distance(b))
 		}) else {
-			return 0;
+			return (0, false);
 		};
+		let _ = ri;
 		let x = pos.x - row.rect.left();
 		let Some((index, cell)) = row
 			.chars
 			.clone()
+			.filter(|&i| {
+				self.cells
+					.get(i)
+					.is_some_and(|cell| cell.width > 0.0 || i == row.chars.start)
+			})
 			.map(|i| (i, self.cells[i]))
 			.min_by(|a, b| {
 				let distance = |cell: &Cell| (x - x.clamp(cell.left, cell.left + cell.width)).abs();
 				distance(&a.1).total_cmp(&distance(&b.1))
 			})
 		else {
-			return row.chars.start;
+			return (row.chars.start, true);
 		};
 		let before = (x < cell.left + cell.width / 2.0) != cell.rtl;
-		if before { index } else { index + 1 }
+		let target = if before { index } else { index + 1 };
+		(target, target == row.chars.start)
+	}
+
+	/// The logical position nearest `pos` (galley coordinates), on the visual side clicked.
+	fn index_at(&self, pos: egui::Pos2) -> usize {
+		self.index_at_with_bias(pos).0
+	}
+
+	fn step_horizontal(
+		&self,
+		text: &str,
+		cursor: CCursor,
+		right: bool,
+		word: bool,
+		inlines: &[Inline],
+	) -> CCursor {
+		if self.rows.is_empty() {
+			return cursor;
+		}
+		let ri = self.row_index_for_cursor(cursor).unwrap_or(0);
+		if word {
+			let rtl = self.local_rtl(ri, cursor.index.0);
+			let logical_forward = right == rtl;
+			let mut next = if logical_forward {
+				next_word_char(text, cursor.index.0)
+			} else {
+				prev_word_char(text, cursor.index.0)
+			};
+			next = self.snap_out_of_inline(next, logical_forward, inlines);
+			return CCursor {
+				index: next.into(),
+				prefer_next_row: logical_forward
+					&& self.rows.get(ri).is_some_and(|r| next > r.chars.end),
+			};
+		}
+		let stops = self.visual_stops(ri, inlines);
+		let pos = stops
+			.iter()
+			.position(|s| s.index == cursor.index.0)
+			.unwrap_or_else(|| {
+				let (_, target_x) = self.caret_local_in_row(&self.rows[ri], cursor.index.0);
+				let target_x = self.rows[ri].rect.left() + target_x;
+				stops
+					.iter()
+					.enumerate()
+					.min_by(|(_, a), (_, b)| {
+						(a.x - target_x).abs().total_cmp(&(b.x - target_x).abs())
+					})
+					.map_or(0, |(idx, _)| idx)
+			});
+		if !right {
+			if pos > 0 {
+				let s = stops[pos - 1];
+				return CCursor {
+					index: s.index.into(),
+					prefer_next_row: s.prefer_next_row,
+				};
+			}
+			// Off the visual left edge of the current row.
+			if self.rows[ri].rtl {
+				if let Some(next_ri) = (ri + 1 < self.rows.len()).then_some(ri + 1) {
+					let next_stops = self.visual_stops(next_ri, inlines);
+					let s = *next_stops.last().unwrap();
+					return CCursor {
+						index: s.index.into(),
+						prefer_next_row: true,
+					};
+				}
+			} else if let Some(prev_ri) = ri.checked_sub(1) {
+				let prev_stops = self.visual_stops(prev_ri, inlines);
+				let s = *prev_stops.last().unwrap();
+				return CCursor {
+					index: s.index.into(),
+					prefer_next_row: false,
+				};
+			}
+		} else {
+			if pos + 1 < stops.len() {
+				let s = stops[pos + 1];
+				return CCursor {
+					index: s.index.into(),
+					prefer_next_row: s.prefer_next_row,
+				};
+			}
+			// Off the visual right edge of the current row.
+			if self.rows[ri].rtl {
+				if let Some(prev_ri) = ri.checked_sub(1) {
+					let prev_stops = self.visual_stops(prev_ri, inlines);
+					let s = *prev_stops.first().unwrap();
+					return CCursor {
+						index: s.index.into(),
+						prefer_next_row: false,
+					};
+				}
+			} else if let Some(next_ri) = (ri + 1 < self.rows.len()).then_some(ri + 1) {
+				let next_stops = self.visual_stops(next_ri, inlines);
+				let s = *next_stops.first().unwrap();
+				return CCursor {
+					index: s.index.into(),
+					prefer_next_row: true,
+				};
+			}
+		}
+		cursor
+	}
+
+	fn step_vertical(
+		&self,
+		cursor: CCursor,
+		down: bool,
+		preferred_x: f32,
+		inlines: &[Inline],
+	) -> CCursor {
+		if self.rows.is_empty() {
+			return cursor;
+		}
+		let ri = self.row_index_for_cursor(cursor).unwrap_or(0);
+		let target_ri = if down {
+			if ri + 1 >= self.rows.len() {
+				let last = self.rows.last().unwrap();
+				return CCursor {
+					index: last.chars.end.into(),
+					prefer_next_row: false,
+				};
+			}
+			ri + 1
+		} else {
+			if ri == 0 {
+				return CCursor {
+					index: self.rows[0].chars.start.into(),
+					prefer_next_row: true,
+				};
+			}
+			ri - 1
+		};
+		let stops = self.visual_stops(target_ri, inlines);
+		let chosen = stops
+			.iter()
+			.min_by(|a, b| {
+				(a.x - preferred_x)
+					.abs()
+					.total_cmp(&(b.x - preferred_x).abs())
+			})
+			.unwrap();
+		CCursor {
+			index: chosen.index.into(),
+			prefer_next_row: chosen.prefer_next_row,
+		}
+	}
+
+	fn handle_navigation(
+		&self,
+		preferred_x: &mut Option<f32>,
+		ctx: &egui::Context,
+		id: egui::Id,
+		text: &str,
+		ime_active: bool,
+		inlines: &[Inline],
+	) {
+		if ime_active || !ctx.memory(|m| m.has_focus(id)) || self.rows.is_empty() {
+			return;
+		}
+		let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) else {
+			return;
+		};
+		let Some(mut range) = state.cursor.char_range() else {
+			return;
+		};
+		let os = ctx.os();
+		let mut changed = false;
+		let mut pending = Vec::new();
+		ctx.input_mut(|input| {
+			input.events.retain(|event| {
+				let egui::Event::Key {
+					key,
+					modifiers,
+					pressed: true,
+					..
+				} = event
+				else {
+					if matches!(event, egui::Event::Text(_) | egui::Event::Paste(_)) {
+						*preferred_x = None;
+					}
+					return true;
+				};
+				if matches!(
+					key,
+					egui::Key::ArrowLeft
+						| egui::Key::ArrowRight
+						| egui::Key::ArrowUp
+						| egui::Key::ArrowDown
+						| egui::Key::Home | egui::Key::End
+				) {
+					pending.push((*key, *modifiers));
+					false
+				} else {
+					*preferred_x = None;
+					true
+				}
+			});
+		});
+		if pending.is_empty() {
+			return;
+		}
+		let total_chars = text.chars().count();
+		for (key, modifiers) in pending {
+			let mac = os == egui::os::OperatingSystem::Mac;
+			let word = if mac {
+				modifiers.alt && !modifiers.command
+			} else {
+				modifiers.ctrl || modifiers.command
+			};
+			let doc_jump = if mac {
+				modifiers.command
+			} else {
+				modifiers.ctrl
+			};
+			match key {
+				egui::Key::ArrowLeft | egui::Key::ArrowRight => {
+					*preferred_x = None;
+					let right = key == egui::Key::ArrowRight;
+					if mac && modifiers.command {
+						let ri = self.row_index_for_cursor(range.primary).unwrap_or(0);
+						let stops = self.visual_stops(ri, inlines);
+						let s = if right {
+							*stops.last().unwrap()
+						} else {
+							*stops.first().unwrap()
+						};
+						range.primary = CCursor {
+							index: s.index.into(),
+							prefer_next_row: s.prefer_next_row,
+						};
+						if !modifiers.shift {
+							range.secondary = range.primary;
+						}
+						changed = true;
+						continue;
+					}
+					if !modifiers.shift
+						&& !modifiers.ctrl && !modifiers.alt
+						&& !modifiers.command
+						&& !range.is_empty()
+					{
+						// Collapse selection to the visual left/right end on screen.
+						let [min, max] = range.sorted_cursors();
+						let pick = match (self.caret_cursor(min), self.caret_cursor(max)) {
+							(Some((r_min, x_min)), Some((r_max, x_max)))
+								if (r_min.center().y - r_max.center().y).abs() < 1.0 =>
+							{
+								if right == (x_min <= x_max) {
+									max
+								} else {
+									min
+								}
+							}
+							_ => {
+								let ri = self.row_index_for_cursor(min).unwrap_or(0);
+								let rtl = self.rows.get(ri).is_some_and(|r| r.rtl);
+								if right == rtl { min } else { max }
+							}
+						};
+						range = egui::text::CCursorRange::one(pick);
+						changed = true;
+						continue;
+					}
+					let next = self.step_horizontal(text, range.primary, right, word, inlines);
+					range.primary = next;
+					if !modifiers.shift {
+						range.secondary = range.primary;
+					}
+					changed = true;
+				}
+				egui::Key::ArrowUp | egui::Key::ArrowDown => {
+					let down = key == egui::Key::ArrowDown;
+					if doc_jump && mac {
+						*preferred_x = None;
+						range.primary = if down {
+							CCursor::new(total_chars)
+						} else {
+							CCursor::new(0)
+						};
+					} else {
+						let x = *preferred_x.get_or_insert_with(|| {
+							self.caret_cursor(range.primary).map_or(0.0, |(_, x)| x)
+						});
+						range.primary = self.step_vertical(range.primary, down, x, inlines);
+					}
+					if !modifiers.shift {
+						range.secondary = range.primary;
+					}
+					changed = true;
+				}
+				egui::Key::Home | egui::Key::End => {
+					*preferred_x = None;
+					let end = key == egui::Key::End;
+					if doc_jump {
+						range.primary = CCursor {
+							index: if end { total_chars } else { 0 }.into(),
+							prefer_next_row: !end,
+						};
+					} else {
+						let ri = self.row_index_for_cursor(range.primary).unwrap_or(0);
+						let row = &self.rows[ri];
+						let target = if end {
+							let cr_adjust = usize::from(
+								row.chars.end > row.chars.start
+									&& self
+										.cells
+										.get(row.chars.end - 1)
+										.is_some_and(|c| c.width == 0.0),
+							);
+							row.chars.end - cr_adjust
+						} else {
+							row.chars.start
+						};
+						range.primary = CCursor {
+							index: target.into(),
+							prefer_next_row: !end,
+						};
+					}
+					if !modifiers.shift {
+						range.secondary = range.primary;
+					}
+					changed = true;
+				}
+				_ => {}
+			}
+		}
+		if changed {
+			range.h_pos = None;
+			state.cursor.set_char_range(Some(range));
+			state.last_interaction_time = ctx.input(|i| i.time);
+			state.store(ctx, id);
+		}
 	}
 }
 
-impl Layout {
-	/// Whether `text` is laid out in visual order, so the composer draws its caret and selection.
-	pub fn bidi_active(&self, text: &str) -> bool {
+fn next_word_char(text: &str, index: usize) -> usize {
+	let mut skipped = 0usize;
+	for (word_idx, word) in text.split_word_bounds().enumerate() {
+		let _ = word_idx;
+		let count = word.chars().count();
+		let end = skipped + count;
+		if end > index && !word.chars().all(char::is_whitespace) {
+			return end;
+		}
+		skipped = end;
+	}
+	text.chars().count()
+}
+
+fn prev_word_char(text: &str, index: usize) -> usize {
+	let mut pos = 0usize;
+	let mut candidate = 0usize;
+	for word in text.split_word_bounds() {
+		let count = word.chars().count();
+		if pos >= index {
+			break;
+		}
+		if !word.chars().all(char::is_whitespace) {
+			candidate = pos;
+		}
+		pos += count;
+	}
+	candidate
+}
+
+impl BidiCore {
+	/// Whether `text` is laid out in visual order, so the editor draws its caret and selection.
+	fn bidi_active(&self, text: &str) -> bool {
 		self.bidi.is_some()
 			&& self
 				.cache
@@ -854,13 +1479,26 @@ impl Layout {
 				.is_some_and(|(_, galley)| galley.job.text == text)
 	}
 
+	fn prepare_navigation(
+		&mut self,
+		ctx: &egui::Context,
+		id: egui::Id,
+		text: &str,
+		ime_active: bool,
+		inlines: &[Inline],
+	) {
+		if !self.bidi_active(text) {
+			self.preferred_x = None;
+			return;
+		}
+		if let Some(bidi) = &self.bidi {
+			bidi.handle_navigation(&mut self.preferred_x, ctx, id, text, ime_active, inlines);
+		}
+	}
+
 	/// Map the pointer to logical characters for a right-to-left draft. egui hit-tests its
 	/// galley assuming glyphs grow left to right, which picks the wrong char once rows reorder.
-	pub fn bidi_pointer(
-		&mut self,
-		output: &mut egui::text_edit::TextEditOutput,
-		ctx: &egui::Context,
-	) {
+	fn bidi_pointer(&mut self, output: &mut egui::text_edit::TextEditOutput, ctx: &egui::Context) {
 		let Some(bidi) = &self.bidi else {
 			self.bidi_gesture = None;
 			return;
@@ -873,7 +1511,9 @@ impl Layout {
 			self.bidi_gesture = None;
 			return;
 		};
-		let index = bidi.index_at((pointer - output.galley_pos).to_pos2());
+		self.preferred_x = None;
+		let (index, prefer_next_row) =
+			bidi.index_at_with_bias((pointer - output.galley_pos).to_pos2());
 		let text = output.galley.job.text.as_str();
 		let (pressed, shift) = ctx.input(|i| (i.pointer.primary_pressed(), i.modifiers.shift));
 		if response.triple_clicked() {
@@ -910,7 +1550,13 @@ impl Layout {
 			Some(Gesture::Chars(anchor)) => (anchor, index),
 			None => (index, index),
 		};
-		let range = egui::text::CCursorRange::two(CCursor::new(range.0), CCursor::new(range.1));
+		let mut primary = CCursor::new(range.1);
+		primary.prefer_next_row = prefer_next_row && range.0 == range.1;
+		let range = egui::text::CCursorRange {
+			primary,
+			secondary: CCursor::new(range.0),
+			h_pos: None,
+		};
 		if output.cursor_range != Some(range) {
 			output.cursor_range = Some(range);
 			output.state.cursor.set_char_range(Some(range));
@@ -918,16 +1564,31 @@ impl Layout {
 		}
 	}
 
-	/// Paint the caret and selection of a right-to-left draft; `slot` is reserved behind the text.
-	pub fn paint_bidi(
+	fn finish_paint(
 		&self,
-		ui: &egui::Ui,
-		output: &egui::text_edit::TextEditOutput,
+		ui: &mut egui::Ui,
+		output: &mut egui::text_edit::TextEditOutput,
 		slot: egui::layers::ShapeIdx,
+		hid_native: bool,
+		outer_visuals: &egui::Visuals,
+		multiline: bool,
 	) {
-		let Some(bidi) = &self.bidi else {
-			return;
-		};
+		if let Some(bidi) = &self.bidi {
+			self.paint_bidi_internal(ui, bidi, output, slot, outer_visuals, multiline);
+		} else if hid_native {
+			paint_ltr_fallback(ui, output, slot, outer_visuals);
+		}
+	}
+
+	fn paint_bidi_internal(
+		&self,
+		ui: &mut egui::Ui,
+		bidi: &Bidi,
+		output: &mut egui::text_edit::TextEditOutput,
+		slot: egui::layers::ShapeIdx,
+		visuals: &egui::Visuals,
+		multiline: bool,
+	) {
 		if !output.response.has_focus() {
 			return;
 		}
@@ -936,12 +1597,14 @@ impl Layout {
 		};
 		let origin = output.galley_pos.to_vec2();
 		let clip = output.text_clip_rect.intersect(ui.clip_rect());
-		let visuals = ui.visuals();
 		let [min, max] = range.sorted_cursors();
 		let selection: Vec<egui::Shape> = (min.index.0..max.index.0)
 			.filter_map(|index| {
 				let row = bidi.rows.iter().find(|row| row.chars.contains(&index))?;
 				let cell = bidi.cells.get(index)?;
+				if cell.width <= 0.0 {
+					return None;
+				}
 				let rect = egui::Rect::from_min_size(
 					egui::pos2(row.rect.left() + cell.left, row.rect.top()),
 					egui::vec2(cell.width, row.rect.height()),
@@ -953,15 +1616,442 @@ impl Layout {
 			})
 			.collect();
 		ui.painter().set(slot, selection);
-		if let Some((row, x)) = bidi.caret(range.primary.index.0) {
-			let top = egui::pos2(x, row.top()) + origin;
-			let bottom = egui::pos2(x, row.bottom()) + origin;
-			if clip.contains(top) || clip.contains(bottom) {
-				ui.painter()
-					.with_clip_rect(clip)
-					.line_segment([top, bottom], visuals.text_cursor.stroke);
+		let Some((row, x)) = bidi.caret_cursor(range.primary) else {
+			return;
+		};
+		let top = egui::pos2(x, row.top()) + origin;
+		let bottom = egui::pos2(x, row.bottom()) + origin;
+		let caret_rect = egui::Rect::from_min_max(top, bottom);
+		if !multiline {
+			let visible_w = output.text_clip_rect.width();
+			if output.galley.size().x > visible_w && visible_w > 0.0 {
+				let mut offset_x = output.state.text_offset.x;
+				let max_offset = (output.galley.size().x - visible_w).max(0.0);
+				if x < offset_x {
+					offset_x = x;
+				} else if x > offset_x + visible_w {
+					offset_x = x - visible_w;
+				}
+				offset_x = offset_x.clamp(0.0, max_offset);
+				if (offset_x - output.state.text_offset.x).abs() > 0.5 {
+					output.state.text_offset.x = offset_x;
+					output.state.clone().store(ui.ctx(), output.response.id);
+					ui.ctx().request_repaint();
+				}
 			}
 		}
+		if ui.memory(|mem| mem.owns_ime_events(output.response.id)) {
+			let to_global = ui
+				.ctx()
+				.layer_transform_to_global(ui.layer_id())
+				.unwrap_or_default();
+			ui.output_mut(|o| {
+				if let Some(ime) = &mut o.ime {
+					ime.cursor_rect = to_global * caret_rect;
+				}
+			});
+		}
+		if ui.input(|i| i.focused) && (clip.contains(top) || clip.contains(bottom)) {
+			let painter = ui.painter().with_clip_rect(clip);
+			paint_blinking_caret(
+				ui,
+				&painter,
+				visuals,
+				top,
+				bottom,
+				output.state.last_interaction_time,
+			);
+		}
+	}
+}
+
+fn paint_blinking_caret(
+	ui: &egui::Ui,
+	painter: &egui::Painter,
+	visuals: &egui::Visuals,
+	top: egui::Pos2,
+	bottom: egui::Pos2,
+	last_interaction_time: f64,
+) {
+	if visuals.text_cursor.blink {
+		let now = ui.input(|i| i.time);
+		let on = visuals.text_cursor.on_duration;
+		let off = visuals.text_cursor.off_duration;
+		let total = (on + off).max(0.05);
+		let elapsed = ((now - last_interaction_time).max(0.0) % f64::from(total)) as f32;
+		let wake_secs = if elapsed < on {
+			painter.line_segment([top, bottom], visuals.text_cursor.stroke);
+			(on - elapsed).max(0.01)
+		} else {
+			(total - elapsed).max(0.01)
+		};
+		ui.ctx()
+			.request_repaint_after(std::time::Duration::from_secs_f32(wake_secs));
+	} else {
+		painter.line_segment([top, bottom], visuals.text_cursor.stroke);
+	}
+}
+
+fn paint_ltr_fallback(
+	ui: &egui::Ui,
+	output: &egui::text_edit::TextEditOutput,
+	slot: egui::layers::ShapeIdx,
+	visuals: &egui::Visuals,
+) {
+	if !output.response.has_focus() {
+		return;
+	}
+	let Some(range) = output.cursor_range else {
+		return;
+	};
+	let origin = output.galley_pos.to_vec2() - egui::vec2(output.galley.rect.left(), 0.0);
+	let clip = output.text_clip_rect.intersect(ui.clip_rect());
+	if !range.is_empty() {
+		let [min, max] = range.sorted_cursors();
+		let min_lc = output.galley.layout_from_cursor(min);
+		let max_lc = output.galley.layout_from_cursor(max);
+		let mut shapes = Vec::new();
+		for ri in min_lc.row..=max_lc.row {
+			let Some(placed) = output.galley.rows.get(ri) else {
+				continue;
+			};
+			let left = if ri == min_lc.row {
+				placed.row.x_offset(min_lc.column)
+			} else {
+				0.0
+			};
+			let right = if ri == max_lc.row {
+				placed.row.x_offset(max_lc.column)
+			} else {
+				placed.row.size.x
+			};
+			let rect = egui::Rect::from_min_max(
+				egui::pos2(placed.pos.x + left, placed.pos.y),
+				egui::pos2(placed.pos.x + right, placed.pos.y + placed.row.size.y),
+			)
+			.translate(origin)
+			.intersect(clip);
+			if rect.is_positive() {
+				shapes.push(egui::Shape::rect_filled(
+					rect,
+					0.0,
+					visuals.selection.bg_fill,
+				));
+			}
+		}
+		ui.painter().set(slot, shapes);
+	}
+	let cursor_rect = output
+		.galley
+		.pos_from_cursor(range.primary)
+		.translate(origin);
+	let top = cursor_rect.center_top();
+	let bottom = cursor_rect.center_bottom();
+	if ui.input(|i| i.focused) && (clip.contains(top) || clip.contains(bottom)) {
+		let painter = ui.painter().with_clip_rect(clip);
+		paint_blinking_caret(
+			ui,
+			&painter,
+			visuals,
+			top,
+			bottom,
+			output.state.last_interaction_time,
+		);
+	}
+}
+
+/// True when `text` or this frame's input events could activate right-to-left visual layout,
+/// eliminating 1-frame cursor/selection lag when inserting the first Arabic char, undoing, or
+/// deleting the last Arabic char.
+pub(crate) fn will_predict_bidi(text: &str, ctx: &egui::Context, id: egui::Id) -> bool {
+	if has_rtl(text) {
+		return true;
+	}
+	let focused = ctx.memory(|m| m.has_focus(id));
+	ctx.input(|i| {
+		i.events.iter().any(|event| match event {
+			egui::Event::Text(s) | egui::Event::Paste(s) => has_rtl(s),
+			egui::Event::Ime(
+				egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text),
+			) => has_rtl(text),
+			egui::Event::Key {
+				key: egui::Key::Z | egui::Key::Y,
+				pressed: true,
+				modifiers,
+				..
+			} => focused && (modifiers.command || modifiers.ctrl),
+			_ => false,
+		})
+	})
+}
+
+/// Single-line label galley with RTL support for truncated pills, headers and hints.
+pub(crate) fn singleline_galley(
+	ui: &egui::Ui,
+	text: String,
+	font: egui::FontId,
+	color: Color32,
+	max_width: f32,
+) -> Arc<egui::Galley> {
+	if has_rtl(&text)
+		&& let Some(rtl) = crate::rtl::layout(
+			ui.ctx(),
+			&[crate::rtl::Span {
+				text: text.clone(),
+				format: TextFormat::simple(font.clone(), color),
+				action: 0,
+				object: None,
+				copy: false,
+			}],
+			f32::INFINITY,
+		) && let Some(line) = rtl.lines.first()
+	{
+		return line.galley.clone();
+	}
+	let mut job = LayoutJob::simple_singleline(text, font, color);
+	job.wrap.max_width = max_width.max(1.0);
+	job.wrap.max_rows = 1;
+	job.wrap.break_anywhere = true;
+	ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// Multi-segment single-line galley with RTL support (e.g. typing indicator `"<name> is typing..."`).
+pub(crate) fn singleline_spans_galley(
+	ui: &egui::Ui,
+	spans: &[(String, egui::FontId, Color32)],
+	max_width: f32,
+) -> Arc<egui::Galley> {
+	if spans.iter().any(|(text, _, _)| has_rtl(text)) {
+		let rtl_spans: Vec<_> = spans
+			.iter()
+			.map(|(text, font, color)| crate::rtl::Span {
+				text: text.clone(),
+				format: TextFormat::simple(font.clone(), *color),
+				action: 0,
+				object: None,
+				copy: false,
+			})
+			.collect();
+		if let Some(rtl) = crate::rtl::layout(ui.ctx(), &rtl_spans, f32::INFINITY)
+			&& let Some(line) = rtl.lines.first()
+		{
+			return line.galley.clone();
+		}
+	}
+	let mut job = LayoutJob::default();
+	job.wrap.max_width = max_width.max(1.0);
+	job.wrap.max_rows = 1;
+	job.wrap.break_anywhere = true;
+	for (text, font, color) in spans {
+		job.append(text, 0.0, TextFormat::simple(font.clone(), *color));
+	}
+	ui.fonts_mut(|f| f.layout_job(job))
+}
+
+const MAX_BIDI_FIELDS: usize = 16;
+
+#[derive(Default)]
+struct BidiInputCache {
+	entries: std::collections::VecDeque<(egui::Id, BidiCore)>,
+}
+
+fn input_cache_id() -> egui::Id {
+	egui::Id::unique("bounded-bidi-text-input-cache")
+}
+
+/// Drop cached standalone bidi `TextEdit` states (called on session/channel switches).
+pub(crate) fn clear_input_cache(ctx: &egui::Context) {
+	ctx.data_mut(|data| {
+		data.remove::<Arc<std::sync::Mutex<BidiInputCache>>>(input_cache_id());
+	});
+}
+
+fn take_field_core(ctx: &egui::Context, id: egui::Id) -> BidiCore {
+	let cache = ctx.data_mut(|data| {
+		data.get_temp::<Arc<std::sync::Mutex<BidiInputCache>>>(input_cache_id())
+			.unwrap_or_else(|| {
+				let created = Arc::new(std::sync::Mutex::new(BidiInputCache::default()));
+				data.insert_temp(input_cache_id(), created.clone());
+				created
+			})
+	});
+	let mut guard = cache.lock().expect("bidi field cache lock");
+	if let Some(pos) = guard.entries.iter().position(|(eid, _)| *eid == id) {
+		guard.entries.remove(pos).unwrap().1
+	} else {
+		BidiCore::default()
+	}
+}
+
+fn put_field_core(ctx: &egui::Context, id: egui::Id, core: BidiCore) {
+	let Some(cache) =
+		ctx.data(|data| data.get_temp::<Arc<std::sync::Mutex<BidiInputCache>>>(input_cache_id()))
+	else {
+		return;
+	};
+	let mut guard = cache.lock().expect("bidi field cache lock");
+	if let Some(pos) = guard.entries.iter().position(|(eid, _)| *eid == id) {
+		guard.entries.remove(pos);
+	}
+	while guard.entries.len() >= MAX_BIDI_FIELDS {
+		guard.entries.pop_front();
+	}
+	guard.entries.push_back((id, core));
+}
+
+/// Wrap any plain `TextEdit` (`singleline` or `multiline`) with full Arabic/RTL shaping, visual
+/// cursor navigation, pointer hit-testing, and flicker-free selection/caret painting.
+pub(crate) fn show_text_edit(
+	ui: &mut egui::Ui,
+	id: egui::Id,
+	text: &mut dyn egui::TextBuffer,
+	multiline: bool,
+	build: impl for<'t> FnOnce(&egui::Ui, egui::TextEdit<'t>) -> egui::TextEdit<'t>,
+) -> egui::text_edit::TextEditOutput {
+	let font = egui::TextStyle::Body.resolve(ui.style());
+	let color = ui.visuals().text_color();
+	show_text_edit_with_job(
+		ui,
+		id,
+		text,
+		multiline,
+		move |_ui, value, width| {
+			let mut job = LayoutJob::simple(value.to_owned(), font.clone(), color, width);
+			if !multiline {
+				job.wrap.max_rows = 1;
+				job.wrap.max_width = f32::INFINITY;
+			}
+			job
+		},
+		build,
+	)
+}
+
+/// Same as [`show_text_edit`], preserving custom highlighting sections (e.g. search filter pills).
+pub(crate) fn show_text_edit_with_job(
+	ui: &mut egui::Ui,
+	id: egui::Id,
+	text: &mut dyn egui::TextBuffer,
+	multiline: bool,
+	mut make_job: impl FnMut(&egui::Ui, &str, f32) -> LayoutJob,
+	build: impl for<'t> FnOnce(&egui::Ui, egui::TextEdit<'t>) -> egui::TextEdit<'t>,
+) -> egui::text_edit::TextEditOutput {
+	let ctx = ui.ctx().clone();
+	let mut core = take_field_core(&ctx, id);
+	let ime_active = ctx.input(|i| {
+		i.events.iter().any(
+			|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if !text.is_empty()),
+		)
+	});
+	core.prepare_navigation(&ctx, id, text.as_str(), ime_active, &[]);
+	let hid_native = will_predict_bidi(text.as_str(), &ctx, id);
+	let outer_visuals = ui.visuals().clone();
+	let selection_slot = ui.painter().add(egui::Shape::Noop);
+	let mut layouter =
+		|ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width: f32| -> Arc<egui::Galley> {
+			let value = buffer.as_str();
+			let job = make_job(ui, value, width);
+			let mut key = DefaultHasher::new();
+			job.text.hash(&mut key);
+			job.wrap.max_width.to_bits().hash(&mut key);
+			job.wrap.max_rows.hash(&mut key);
+			for s in &job.sections {
+				s.byte_range.start.0.hash(&mut key);
+				s.byte_range.end.0.hash(&mut key);
+				s.format.color.hash(&mut key);
+				s.format.background.hash(&mut key);
+				s.format.font_id.hash(&mut key);
+			}
+			crate::fonts::revision(ui.ctx()).hash(&mut key);
+			ui.ctx().fonts(|f| f.layout_generation()).hash(&mut key);
+			ui.ctx().pixels_per_point().to_bits().hash(&mut key);
+			let hash = key.finish();
+			if let Some((cached, galley)) = &core.cache
+				&& *cached == hash
+			{
+				return galley.clone();
+			}
+			let mut galley = ui.fonts_mut(|f| f.layout_job(job));
+			let reordered = has_rtl(value)
+				.then(|| {
+					reorder(
+						ui,
+						&mut galley,
+						if multiline { width } else { f32::INFINITY },
+					)
+				})
+				.flatten();
+			core.bidi = reordered.map(|(cells, rtl)| Bidi::new(cells, &rtl, &galley, &[]));
+			core.cache = Some((hash, galley.clone()));
+			galley
+		};
+	let edit = if multiline {
+		egui::TextEdit::multiline(text)
+	} else {
+		egui::TextEdit::singleline(text)
+	};
+	let edit = build(ui, edit).id(id).layouter(&mut layouter);
+	let mut output = ui
+		.scope(|ui| {
+			if hid_native {
+				let visuals = ui.visuals_mut();
+				visuals.text_cursor.stroke.color = Color32::TRANSPARENT;
+				visuals.selection.bg_fill = Color32::TRANSPARENT;
+			}
+			edit.show(ui)
+		})
+		.inner;
+	core.bidi_pointer(&mut output, &ctx);
+	core.finish_paint(
+		ui,
+		&mut output,
+		selection_slot,
+		hid_native,
+		&outer_visuals,
+		multiline,
+	);
+	put_field_core(&ctx, id, core);
+	output
+}
+
+impl Layout {
+	/// Whether `text` is laid out in visual order, so the composer draws its caret and selection.
+	pub fn bidi_active(&self, text: &str) -> bool {
+		self.core.bidi_active(text)
+	}
+
+	/// Prepare keyboard navigation (`ArrowLeft/Right/Up/Down`, `Home/End`) before `TextEdit` runs.
+	pub fn prepare_navigation(
+		&mut self,
+		ctx: &egui::Context,
+		id: egui::Id,
+		text: &str,
+		ime_active: bool,
+	) {
+		self.core
+			.prepare_navigation(ctx, id, text, ime_active, &self.inlines);
+	}
+
+	/// Map the pointer to logical characters for a right-to-left draft.
+	pub fn bidi_pointer(
+		&mut self,
+		output: &mut egui::text_edit::TextEditOutput,
+		ctx: &egui::Context,
+	) {
+		self.core.bidi_pointer(output, ctx);
+	}
+
+	/// Finish painting the composer's bidi caret/selection (or LTR fallback) and fix IME/scroll.
+	pub fn finish_paint(
+		&self,
+		ui: &mut egui::Ui,
+		output: &mut egui::text_edit::TextEditOutput,
+		slot: egui::layers::ShapeIdx,
+		hid_native: bool,
+		outer_visuals: &egui::Visuals,
+	) {
+		self.core
+			.finish_paint(ui, output, slot, hid_native, outer_visuals, true);
 	}
 }
 
@@ -998,7 +2088,11 @@ mod tests {
 			})
 			.drop_without_applying_deltas();
 			let galley = galley.unwrap();
-			let bidi = layout.bidi.as_ref().expect("RTL draft uses visual order");
+			let bidi = layout
+				.core
+				.bidi
+				.as_ref()
+				.expect("RTL draft uses visual order");
 			let row = &galley.rows[0];
 			assert_eq!(
 				row.row.glyphs.len(),
@@ -1055,7 +2149,7 @@ mod tests {
 		})
 		.drop_without_applying_deltas();
 		assert!(
-			layout.bidi.is_none(),
+			layout.core.bidi.is_none(),
 			"left-to-right drafts keep egui's own caret"
 		);
 	}
@@ -1131,7 +2225,7 @@ mod tests {
 						.show(ui);
 					layout.bidi_pointer(&mut output, ui.ctx());
 					// Inside the first word "مرحبا", between its second and third letters.
-					let (row, x) = layout.bidi.as_ref().unwrap().caret(2).unwrap();
+					let (row, x) = layout.core.bidi.as_ref().unwrap().caret(2).unwrap();
 					point.set(egui::pos2(x, row.center().y) + output.galley_pos.to_vec2());
 				},
 			)
@@ -1317,5 +2411,114 @@ mod tests {
 			),
 			"hi <@42>č你!"
 		);
+	}
+
+	#[test]
+	fn arabic_first_last_char_prediction_crlf_and_zero_width_stay_in_sync() {
+		let ctx = egui::Context::default();
+		crate::fonts::install(&ctx);
+		let mut avatars = Avatars::default();
+		let mut layout = Layout::default();
+		let id = egui::Id::unique("arabic-crlf-sync");
+		// Frame 0 prediction catches the very first incoming Arabic keystroke.
+		ctx.run_ui(
+			egui::RawInput {
+				events: vec![egui::Event::Text("م".into())],
+				..Default::default()
+			},
+			|ui| {
+				assert!(will_predict_bidi("", ui.ctx(), id));
+				let mut text = "مرحبا\r\n\u{200f}\r\nبكم".to_owned();
+				let galley =
+					layout.galley(ui, &text, 300.0, &[], &[], &[], false, &mut avatars, true);
+				assert!(
+					layout.bidi_active(&text),
+					"CRLF and invisible controls keep bidi enabled"
+				);
+				assert_eq!(
+					galley.rect.left(),
+					0.0,
+					"right-aligned RTL galley keeps min.x == 0.0 so TextEdit does not shift glyphs off the caret"
+				);
+				let mapped: usize = galley
+					.rows
+					.iter()
+					.map(|row| row.row.glyphs.len() + usize::from(row.ends_with_newline))
+					.sum();
+				assert_eq!(mapped, text.chars().count());
+				let bidi = layout.core.bidi.as_ref().unwrap();
+				for i in 0..=text.chars().count() {
+					assert!(bidi.caret(i).is_some(), "caret exists at char {i}");
+				}
+				assert!(will_predict_bidi(&text, ui.ctx(), id));
+				text.clear();
+				let _ = text;
+			},
+		)
+		.drop_without_applying_deltas();
+	}
+
+	#[test]
+	fn arabic_mixed_navigation_vertical_arrows_and_singleline_input() {
+		let ctx = egui::Context::default();
+		crate::fonts::install(&ctx);
+		let mut avatars = Avatars::default();
+		let mut layout = Layout::default();
+		let mixed = "مرحبا hello بكم";
+		ctx.run_ui(Default::default(), |ui| {
+			let _ = layout.galley(ui, mixed, 400.0, &[], &[], &[], false, &mut avatars, true);
+		})
+		.drop_without_applying_deltas();
+		let bidi = layout.core.bidi.as_ref().unwrap();
+		// Stepping left visually across mixed Arabic/English never moves caret X rightward.
+		let mut cursor = CCursor::new(0);
+		let mut xs = vec![bidi.caret_cursor(cursor).unwrap().1];
+		for _ in 0..mixed.chars().count() {
+			cursor = bidi.step_horizontal(mixed, cursor, false, false, &[]);
+			xs.push(bidi.caret_cursor(cursor).unwrap().1);
+		}
+		for pair in xs.windows(2) {
+			assert!(
+				pair[1] <= pair[0] + 0.01,
+				"ArrowLeft visually moved right: {} -> {}",
+				pair[0],
+				pair[1]
+			);
+		}
+		// Multiline vertical navigation keeps approximate visual X between Arabic rows.
+		let multi = "مرحبا بك في سطر\nالسطر الثاني هنا";
+		ctx.run_ui(Default::default(), |ui| {
+			let _ = layout.galley(ui, multi, 400.0, &[], &[], &[], false, &mut avatars, true);
+		})
+		.drop_without_applying_deltas();
+		let bidi = layout.core.bidi.as_ref().unwrap();
+		let top_mid = CCursor::new(5);
+		let (_, top_x) = bidi.caret_cursor(top_mid).unwrap();
+		let down = bidi.step_vertical(top_mid, true, top_x, &[]);
+		let row1 = bidi.row_index_for_cursor(down).unwrap();
+		assert_eq!(row1, 1);
+		let up = bidi.step_vertical(down, false, top_x, &[]);
+		assert_eq!(bidi.row_index_for_cursor(up), Some(0));
+
+		// Standalone singleline bidi edit handles Arabic text and arrow editing cleanly.
+		let mut single = "مرحبا".to_owned();
+		let single_id = egui::Id::unique("singleline-arabic-edit");
+		ctx.memory_mut(|m| m.request_focus(single_id));
+		let frame = |time, text: &mut String, events: Vec<egui::Event>| {
+			ctx.run_ui(
+				egui::RawInput {
+					time: Some(time),
+					events,
+					..Default::default()
+				},
+				|ui| {
+					let _ = show_text_edit(ui, single_id, text, false, |_ui, e| e);
+				},
+			)
+			.drop_without_applying_deltas();
+		};
+		frame(0.0, &mut single, vec![]);
+		frame(0.1, &mut single, vec![egui::Event::Text("!".into())]);
+		assert!(single.contains('!') && has_rtl(&single));
 	}
 }

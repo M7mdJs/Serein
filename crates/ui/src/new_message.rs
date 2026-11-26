@@ -123,12 +123,16 @@ impl NewMessageUi {
 			.width(440.0)
 			.show(ctx, |d| {
 				d.content(|ui| {
-					let input = design::input(
+					let input = design::bidi_input(
 						ui,
-						egui::TextEdit::singleline(&mut self.query)
-							.align(egui::Align2::LEFT_CENTER)
-							.hint_text(crate::i18n::translate("new-message-search"))
-							.char_limit(128),
+						ui.scope_id().with("new-message-search"),
+						&mut self.query,
+						false,
+						|edit| {
+							edit.align(egui::Align2::LEFT_CENTER)
+								.hint_text(crate::i18n::translate("new-message-search"))
+								.char_limit(128)
+						},
 					);
 					if std::mem::take(&mut self.focus) {
 						input.request_focus();

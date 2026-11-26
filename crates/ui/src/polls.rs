@@ -576,12 +576,16 @@ fn editor(
 ) {
 	ui.spacing_mut().item_spacing.y = 8.0;
 	design::label(ui, "polls-creator-question");
-	design::input(
+	design::bidi_input(
 		ui,
-		egui::TextEdit::multiline(&mut draft.poll.question)
-			.hint_text(translate("polls-creator-question-hint"))
-			.char_limit(300)
-			.desired_rows(1),
+		ui.scope_id().with("poll-question"),
+		&mut draft.poll.question,
+		true,
+		|edit| {
+			edit.hint_text(translate("polls-creator-question-hint"))
+				.char_limit(300)
+				.desired_rows(1)
+		},
 	);
 	ui.add_space(12.0);
 	design::label(ui, "polls-creator-answers");
@@ -677,17 +681,23 @@ fn answer_field(
 				ui.horizontal(|ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
 					let emoji = emoji_button(ui, answer.emoji.as_ref(), open, avatars, demo);
-					let text = ui.add(
-						egui::TextEdit::singleline(&mut answer.text)
-							.align(egui::Align2::LEFT_CENTER)
-							.hint_text(translate_args(
-								"polls-creator-answer-hint",
-								&[("number", &(index + 1).to_string())],
-							))
-							.char_limit(55)
-							.desired_width(ui.available_width())
-							.frame(egui::Frame::NONE),
-					);
+					let text = crate::composer_text::show_text_edit(
+						ui,
+						ui.scope_id().with(("poll-answer", index)),
+						&mut answer.text,
+						false,
+						|ui, edit| {
+							edit.align(egui::Align2::LEFT_CENTER)
+								.hint_text(translate_args(
+									"polls-creator-answer-hint",
+									&[("number", &(index + 1).to_string())],
+								))
+								.char_limit(55)
+								.desired_width(ui.available_width())
+								.frame(egui::Frame::NONE)
+						},
+					)
+					.response;
 					(emoji, text)
 				})
 				.inner

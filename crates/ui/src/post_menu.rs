@@ -509,11 +509,12 @@ impl PostMenu {
 							crate::i18n::translate("post-menu-show-title")
 						),
 					);
-					dialog::input(
+					dialog::bidi_input(
 						ui,
-						egui::TextEdit::singleline(&mut editor.name)
-							.align(egui::Align2::LEFT_CENTER)
-							.char_limit(100),
+						ui.scope_id().with(("post-menu-title", editor.channel)),
+						&mut editor.name,
+						false,
+						|edit| edit.align(egui::Align2::LEFT_CENTER).char_limit(100),
 					)
 					.labelled_by(label.id);
 					editor.name.shrink_to_fit();

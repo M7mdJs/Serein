@@ -993,12 +993,16 @@ impl Editor {
 		// Column spacing must not leak into the swatch, trait and button rows.
 		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 		design::group(ui, "server-settings-profile-form-name", |ui| {
-			design::input(
+			design::bidi_input(
 				ui,
-				egui::TextEdit::singleline(&mut draft.name)
-					.align(egui::Align2::LEFT_CENTER)
-					.char_limit(100)
-					.hint_text(crate::i18n::translate("server-settings-profile-form-name")),
+				ui.scope_id().with("server-settings-name"),
+				&mut draft.name,
+				false,
+				|edit| {
+					edit.align(egui::Align2::LEFT_CENTER)
+						.char_limit(100)
+						.hint_text(crate::i18n::translate("server-settings-profile-form-name"))
+				},
 			)
 			.on_hover_text(crate::i18n::translate("server-settings-profile-form-name"));
 		});
@@ -1097,15 +1101,18 @@ impl Editor {
 				"server-settings-profile-form-how-did-your-server-get-started-why-should-people-join",
 			);
 			ui.add_space(4.0);
-			design::input(
+			design::bidi_input(
 				ui,
-				egui::TextEdit::multiline(&mut draft.description)
-					.hint_text(crate::i18n::translate(
+				ui.scope_id().with("server-settings-description"),
+				&mut draft.description,
+				true,
+				|edit| {
+					edit.hint_text(crate::i18n::translate(
 						"server-settings-profile-form-tell-the-world-a-bit-about-this-server",
 					))
 					.char_limit(300)
-					.desired_width(f32::INFINITY)
-					.desired_rows(DESCRIPTION_ROWS),
+					.desired_rows(DESCRIPTION_ROWS)
+				},
 			)
 			.on_hover_text(crate::i18n::translate(
 				"server-settings-profile-form-description",

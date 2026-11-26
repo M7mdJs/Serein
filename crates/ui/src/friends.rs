@@ -146,12 +146,16 @@ impl MessagingUi {
 			let mut send = false;
 			let mut field = |ui: &mut egui::Ui, width: f32| {
 				ui.allocate_ui(vec2(width, 40.0), |ui| {
-					let input = design::input(
+					let input = design::bidi_input(
 						ui,
-						egui::TextEdit::singleline(&mut self.friends.username)
-							.align(egui::Align2::LEFT_CENTER)
-							.hint_text(language.text("friends-enter-username"))
-							.char_limit(33),
+						ui.scope_id().with("friends-add-username"),
+						&mut self.friends.username,
+						false,
+						|edit| {
+							edit.align(egui::Align2::LEFT_CENTER)
+								.hint_text(language.text("friends-enter-username"))
+								.char_limit(33)
+						},
 					);
 					enabled
 						&& input.lost_focus()
@@ -999,15 +1003,15 @@ fn search(ui: &mut egui::Ui, query: &mut String, id: egui::Id, hint: &str) -> eg
 		.inner_margin(egui::Margin::symmetric(12, 6))
 		.show(ui, |ui| {
 			ui.horizontal(|ui| {
-				let edit = ui.add(
-					egui::TextEdit::singleline(query)
-						.align(egui::Align2::LEFT_CENTER)
-						.id(id)
-						.hint_text(hint)
-						.char_limit(128)
-						.frame(egui::Frame::NONE)
-						.desired_width((ui.available_width() - 30.0).max(40.0)),
-				);
+				let edit =
+					crate::composer_text::show_text_edit(ui, id, query, false, |ui, edit| {
+						edit.align(egui::Align2::LEFT_CENTER)
+							.hint_text(hint)
+							.char_limit(128)
+							.frame(egui::Frame::NONE)
+							.desired_width((ui.available_width() - 30.0).max(40.0))
+					})
+					.response;
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					if query.is_empty() {
 						icons::inline(ui, Icon::Search, 18.0, colors.muted);

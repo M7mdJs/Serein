@@ -772,11 +772,12 @@ impl RolesUi {
 			ui,
 			&crate::i18n::translate("server-roles-display-role-name"),
 		);
-		design::input(
+		design::bidi_input(
 			ui,
-			egui::TextEdit::singleline(&mut draft.name)
-				.align(egui::Align2::LEFT_CENTER)
-				.char_limit(100),
+			ui.scope_id().with("server-role-name"),
+			&mut draft.name,
+			false,
+			|edit| edit.align(egui::Align2::LEFT_CENTER).char_limit(100),
 		)
 		.labelled_by(label.id);
 		section(ui, "Role Style");

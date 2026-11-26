@@ -3327,19 +3327,34 @@ fn message_input(
 					.auto_shrink([false, true])
 					.stick_to_bottom(true)
 					.show(ui, |ui| {
-						ui.add_enabled(
-							enabled,
-							egui::TextEdit::multiline(&mut session.message_draft)
-								.id(id)
-								.char_limit(client_core::MAX_CONTENT)
-								.desired_width(edit_width)
-								.desired_rows(1)
-								.min_size(vec2(0.0, button))
-								.align(egui::Align2::LEFT_CENTER)
-								.frame(egui::Frame::NONE)
-								.text_color(theme.text)
-								.hint_text(RichText::new(placeholder).color(theme.muted)),
-						);
+						ui.add_enabled_ui(enabled, |ui| {
+							let body_font = egui::TextStyle::Body.resolve(ui.style());
+							let body_color = theme.text;
+							crate::composer_text::show_text_edit_with_job(
+								ui,
+								id,
+								&mut session.message_draft,
+								true,
+								move |_ui, value, width| {
+									egui::text::LayoutJob::simple(
+										value.to_owned(),
+										body_font.clone(),
+										body_color,
+										width,
+									)
+								},
+								|_ui, edit| {
+									edit.char_limit(client_core::MAX_CONTENT)
+										.desired_width(edit_width)
+										.desired_rows(1)
+										.min_size(vec2(0.0, button))
+										.align(egui::Align2::LEFT_CENTER)
+										.frame(egui::Frame::NONE)
+										.text_color(theme.text)
+										.hint_text(RichText::new(placeholder).color(theme.muted))
+								},
+							);
+						});
 					});
 				let open_label = crate::i18n::translate("profiles-message-open-chat");
 				let (_, open_rect) = ui.allocate_space(Vec2::splat(button));

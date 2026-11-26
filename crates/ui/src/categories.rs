@@ -433,15 +433,13 @@ fn category_header(
 		),
 		color,
 	);
-	let mut job = egui::text::LayoutJob::simple_singleline(
+	let label = crate::composer_text::singleline_galley(
+		ui,
 		crate::emoji::presentation(name).to_uppercase(),
 		egui::FontId::new(12.0, crate::design::semibold_family(ui.ctx())),
 		color,
+		(rect.width() - 24.0).max(10.0),
 	);
-	job.wrap.max_width = (rect.width() - 24.0).max(10.0);
-	job.wrap.max_rows = 1;
-	job.wrap.break_anywhere = true;
-	let label = ui.painter().layout_job(job);
 	let label_rect = egui::Rect::from_min_size(
 		egui::pos2(rect.left() + 16.0, rect.bottom() - 6.0 - label.size().y),
 		egui::vec2(rect.width() - 24.0, label.size().y),

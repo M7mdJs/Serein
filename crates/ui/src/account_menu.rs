@@ -868,15 +868,18 @@ impl MessagingUi {
 			});
 		ui.add_space(16.0);
 		let label = dialog::label(ui, "account-menu-custom-status-editor-status-text");
-		dialog::input(
+		dialog::bidi_input(
 			ui,
-			egui::TextEdit::singleline(&mut self.account_menu.draft)
-				.align(egui::Align2::LEFT_CENTER)
-				.id_salt(("account-custom-status", state.generation))
-				.hint_text(crate::i18n::translate(
-					"account-menu-custom-status-editor-what-s-on-your-mind",
-				))
-				.char_limit(128),
+			ui.make_persistent_id(("account-custom-status", state.generation)),
+			&mut self.account_menu.draft,
+			false,
+			|edit| {
+				edit.align(egui::Align2::LEFT_CENTER)
+					.hint_text(crate::i18n::translate(
+						"account-menu-custom-status-editor-what-s-on-your-mind",
+					))
+					.char_limit(128)
+			},
 		)
 		.labelled_by(label.id);
 		let (_, valid, _) = self.custom_status_draft();

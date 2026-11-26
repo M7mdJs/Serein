@@ -2473,6 +2473,16 @@ pub fn hint(ui: &mut egui::Ui, text: &str) {
 	ui.add(egui::Label::new(RichText::new(text).size(12.0).color(colors.muted)).wrap());
 }
 
+fn stroke_input(ui: &egui::Ui, colors: &Palette, response: &egui::Response) {
+	let stroke = if response.has_focus() {
+		Stroke::new(2.0, colors.accent)
+	} else {
+		Stroke::new(1.0, colors.border)
+	};
+	ui.painter()
+		.rect_stroke(response.rect, 8, stroke, egui::StrokeKind::Inside);
+}
+
 /// Text input with the dialog's inset fill and an accent focus ring.
 pub fn input(ui: &mut egui::Ui, edit: egui::TextEdit<'_>) -> egui::Response {
 	let colors = palette(ui);
@@ -2486,13 +2496,32 @@ pub fn input(ui: &mut egui::Ui, edit: egui::TextEdit<'_>) -> egui::Response {
 					.inner_margin(egui::Margin::symmetric(12, 9)),
 			),
 	);
-	let stroke = if response.has_focus() {
-		Stroke::new(2.0, colors.accent)
-	} else {
-		Stroke::new(1.0, colors.border)
-	};
-	ui.painter()
-		.rect_stroke(response.rect, 8, stroke, egui::StrokeKind::Inside);
+	stroke_input(ui, &colors, &response);
+	response
+}
+
+/// Text input with [`input`] styling and full Arabic/RTL bidi shaping, navigation and caret.
+pub fn bidi_input(
+	ui: &mut egui::Ui,
+	id: egui::Id,
+	text: &mut dyn egui::TextBuffer,
+	multiline: bool,
+	edit: impl for<'t> FnOnce(egui::TextEdit<'t>) -> egui::TextEdit<'t>,
+) -> egui::Response {
+	let colors = palette(ui);
+	let response = crate::composer_text::show_text_edit(ui, id, text, multiline, move |_ui, e| {
+		edit(e)
+			.desired_width(f32::INFINITY)
+			.background_color(colors.base)
+			.frame(
+				egui::Frame::new()
+					.fill(colors.base)
+					.corner_radius(8)
+					.inner_margin(egui::Margin::symmetric(12, 9)),
+			)
+	})
+	.response;
+	stroke_input(ui, &colors, &response);
 	response
 }
 

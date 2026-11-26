@@ -329,13 +329,16 @@ impl GroupMenu {
 					ui.add_space(10.0);
 					ui.add_enabled_ui(!busy, |ui| {
 						let label = crate::dialog::label(ui, "group-menu-show-group-name");
-						let response = crate::dialog::input(
+						let response = crate::dialog::bidi_input(
 							ui,
-							egui::TextEdit::singleline(&mut dialog.name)
-								.align(egui::Align2::LEFT_CENTER)
-								.char_limit(100)
-								.hint_text(crate::i18n::translate("group-menu-show-group-name"))
-								.id(egui::Id::unique(("group-name", self.revision))),
+							egui::Id::unique(("group-name", self.revision)),
+							&mut dialog.name,
+							false,
+							|edit| {
+								edit.align(egui::Align2::LEFT_CENTER)
+									.char_limit(100)
+									.hint_text(crate::i18n::translate("group-menu-show-group-name"))
+							},
 						)
 						.labelled_by(label.id);
 						if dialog.focus_name {

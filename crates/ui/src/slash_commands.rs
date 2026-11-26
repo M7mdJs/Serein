@@ -1397,26 +1397,52 @@ impl UserPicker {
 		let (response, browse) = ui
 			.horizontal(|ui| {
 				let text_color = design::palette(ui).text_strong;
-				let edit = egui::TextEdit::singleline(value)
-					.id(id)
-					.align(egui::Align2::LEFT_CENTER)
-					.frame(egui::Frame::NONE)
-					.event_filter(user_picker_filter(was_open))
-					.return_key(None);
-				let edit = match target {
-					PickerTarget::Id => edit
-						.hint_text(crate::i18n::translate(
-							"search-filters-user-picker-search-users",
-						))
-						.char_limit(65)
-						.desired_width((ui.available_width() - 25.0).max(24.0)),
-					PickerTarget::Mention { char_limit } => edit
-						.font(egui::FontId::proportional(14.0))
-						.text_color(text_color)
-						.char_limit(char_limit)
-						.desired_width(ui.available_width()),
+				let slash_font = egui::FontId::proportional(14.0);
+				let response = match target {
+					PickerTarget::Id => {
+						crate::composer_text::show_text_edit(ui, id, value, false, |ui, edit| {
+							edit.align(egui::Align2::LEFT_CENTER)
+								.frame(egui::Frame::NONE)
+								.event_filter(user_picker_filter(was_open))
+								.return_key(None)
+								.hint_text(crate::i18n::translate(
+									"search-filters-user-picker-search-users",
+								))
+								.char_limit(65)
+								.desired_width((ui.available_width() - 25.0).max(24.0))
+						})
+						.response
+					}
+					PickerTarget::Mention { char_limit } => {
+						crate::composer_text::show_text_edit_with_job(
+							ui,
+							id,
+							value,
+							false,
+							move |_ui, s, _w| {
+								let mut job = egui::text::LayoutJob::simple_singleline(
+									s.to_owned(),
+									slash_font.clone(),
+									text_color,
+								);
+								job.wrap.max_rows = 1;
+								job.wrap.max_width = f32::INFINITY;
+								job
+							},
+							|ui, edit| {
+								edit.align(egui::Align2::LEFT_CENTER)
+									.frame(egui::Frame::NONE)
+									.event_filter(user_picker_filter(was_open))
+									.return_key(None)
+									.font(egui::FontId::proportional(14.0))
+									.text_color(text_color)
+									.char_limit(char_limit)
+									.desired_width(ui.available_width())
+							},
+						)
+						.response
+					}
 				};
-				let response = ui.add(edit);
 				let browse = !mention
 					&& ui
 						.add(
@@ -1852,16 +1878,33 @@ fn argument(
 			"slash-commands-argument-attachment-arguments-are-not-supported-yet",
 		))
 	} else {
-		ui.add(
-			egui::TextEdit::singleline(value)
-				.align(egui::Align2::LEFT_CENTER)
-				.id(id)
-				.frame(egui::Frame::NONE)
-				.font(egui::FontId::proportional(14.0))
-				.text_color(design::palette(ui).text_strong)
-				.char_limit(usize::from(option.max_length.unwrap_or(6000)).min(6000))
-				.desired_width(ui.available_width()),
+		let font = egui::FontId::proportional(14.0);
+		let text_color = design::palette(ui).text_strong;
+		crate::composer_text::show_text_edit_with_job(
+			ui,
+			id,
+			value,
+			false,
+			move |_ui, s, _w| {
+				let mut job = egui::text::LayoutJob::simple_singleline(
+					s.to_owned(),
+					font.clone(),
+					text_color,
+				);
+				job.wrap.max_rows = 1;
+				job.wrap.max_width = f32::INFINITY;
+				job
+			},
+			|ui, edit| {
+				edit.align(egui::Align2::LEFT_CENTER)
+					.frame(egui::Frame::NONE)
+					.font(egui::FontId::proportional(14.0))
+					.text_color(text_color)
+					.char_limit(usize::from(option.max_length.unwrap_or(6000)).min(6000))
+					.desired_width(ui.available_width())
+			},
 		)
+		.response
 	}
 }
 

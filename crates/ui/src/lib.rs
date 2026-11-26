@@ -4039,15 +4039,17 @@ impl MessagingUi {
 		let ime_this_frame = keyboard_enabled
 			&& (self.ime_active
 				|| (composer_ime && ctx.input(|i| i.events.iter().any(ime_updates_text))));
-		if keyboard_enabled {
+		if keyboard_enabled && composer_ime {
 			ctx.input(|i| {
 				for event in &i.events {
 					if let egui::Event::Ime(event) = event {
 						match event {
 							egui::ImeEvent::Preedit { text, .. } => {
-								self.ime_active = composer_ime && !text.is_empty()
+								self.ime_active = !text.is_empty()
 							}
-							egui::ImeEvent::Commit(_) => self.ime_active = false,
+							egui::ImeEvent::Commit(_) | egui::ImeEvent::Disabled => {
+								self.ime_active = false
+							}
 							_ => {}
 						}
 					}
@@ -4077,6 +4079,9 @@ impl MessagingUi {
 				}
 			}
 		} else {
+			// Closing or blurring the composer (e.g. opening a modal or focusing search)
+			// must never leave `ime_active` stuck true across frames (#950).
+			self.ime_active = false;
 			self.ime_enter = None;
 		}
 		if editing_here {
@@ -4611,27 +4616,12 @@ impl MessagingUi {
                             rich_layout.select_deleted_inline(ctx, composer_id);
                         }
                         let selection = text_menu::selection_for_menu(ctx, composer_id);
-                        // Right-to-left drafts are drawn in visual order, so arrows follow the
-                        // reading direction of the paragraph holding the caret.
-                        let bidi_draft = rich_layout.bidi_active(draft);
-                        if bidi_draft
-                            && ctx.memory(|m| m.has_focus(composer_id))
-                            && egui::text_edit::TextEditState::load(ctx, composer_id)
-                                .and_then(|state| state.cursor.char_range())
-                                .is_some_and(|range| composer_text::paragraph_rtl(draft, range.primary.index.0))
-                        {
-                            ctx.input_mut(|input| {
-                                for event in &mut input.events {
-                                    if let egui::Event::Key { key, .. } = event {
-                                        *key = match *key {
-                                            egui::Key::ArrowLeft => egui::Key::ArrowRight,
-                                            egui::Key::ArrowRight => egui::Key::ArrowLeft,
-                                            other => other,
-                                        };
-                                    }
-                                }
-                            });
-                        }
+                        rich_layout.prepare_navigation(
+                            ctx,
+                            composer_id,
+                            draft,
+                            self.ime_active || ime_this_frame,
+                        );
                         let mut output = egui::ScrollArea::vertical()
                             .id_salt((composer_id, channel, editing_key))
                             .max_height(ui.ctx().viewport_rect().height() * 0.5)
@@ -4653,22 +4643,25 @@ impl MessagingUi {
                                     )
                                 };
                                 // Multiline edits wrap their hint; a pre-laid galley keeps a
-                                // long channel name on one elided line.
+                                // long channel name on one elided line and preserves RTL order.
                                 let hint = if draft.is_empty() {
-                                    let mut job = egui::text::LayoutJob::simple_singleline(
+                                    egui::WidgetText::from(composer_text::singleline_galley(
+                                        ui,
                                         placeholder.clone(),
                                         egui::TextStyle::Body.resolve(ui.style()),
                                         ui.visuals().weak_text_color(),
-                                    );
-                                    job.wrap = egui::text::TextWrapping::truncate_at_width(ui.available_width());
-                                    egui::WidgetText::from(ui.painter().layout_job(job))
+                                        ui.available_width(),
+                                    ))
                                 } else {
                                     egui::WidgetText::default()
                                 };
+                                let outer_visuals = ui.visuals().clone();
+                                let hide_native =
+                                    composer_text::will_predict_bidi(draft, ctx, composer_id);
                                 let selection_slot = ui.painter().add(egui::Shape::Noop);
                                 let mut output = ui.scope(|ui| {
                                 // The composer paints the caret and selection of visual-order drafts.
-                                if bidi_draft {
+                                if hide_native {
                                     let visuals = ui.visuals_mut();
                                     visuals.text_cursor.stroke.color = egui::Color32::TRANSPARENT;
                                     visuals.selection.bg_fill = egui::Color32::TRANSPARENT;
@@ -4693,9 +4686,13 @@ impl MessagingUi {
                                 }).inner;
                                 rich_layout.bidi_pointer(&mut output, ctx);
                                 rich_layout.paint(ui, &output, &mut self.avatars);
-                                if bidi_draft {
-                                    rich_layout.paint_bidi(ui, &output, selection_slot);
-                                }
+                                rich_layout.finish_paint(
+                                    ui,
+                                    &mut output,
+                                    selection_slot,
+                                    hide_native,
+                                    &outer_visuals,
+                                );
                                 output
                             }).inner;
                         if !self.ime_active && !ime_this_frame {
@@ -8124,6 +8121,20 @@ mod composer_tests {
 				[Command::Send { .. }]
 			));
 		}
+		// Focusing away from the composer while preediting must not leave ime_active stuck (#950).
+		let _ = edit_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+				text: "composing".into(),
+				active_range_chars: None,
+			})],
+		);
+		assert!(view.ime_active);
+		ctx.memory_mut(|m| m.request_focus(egui::Id::unique("other-field")));
+		let _ = edit_frame(&ctx, &mut view, &mut state, vec![]);
+		assert!(!view.ime_active);
 	}
 
 	#[test]

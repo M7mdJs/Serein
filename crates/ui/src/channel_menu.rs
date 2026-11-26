@@ -942,18 +942,22 @@ impl Dialog {
 				"channel-menu-overview-channel-name"
 			},
 		);
-		let name = dialog::input(
+		let name = dialog::bidi_input(
 			ui,
-			egui::TextEdit::singleline(&mut self.draft.name)
-				.align(egui::Align2::LEFT_CENTER)
-				.hint_text(crate::i18n::translate_if_key(
-					&(if self.kind == Kind::CreateCategory {
-						crate::i18n::translate("channel-menu-overview-new-category")
-					} else {
-						crate::i18n::translate("channel-menu-overview-new-channel")
-					}),
-				))
-				.char_limit(100),
+			ui.scope_id().with("channel-menu-name"),
+			&mut self.draft.name,
+			false,
+			|edit| {
+				edit.align(egui::Align2::LEFT_CENTER)
+					.hint_text(crate::i18n::translate_if_key(
+						&(if self.kind == Kind::CreateCategory {
+							crate::i18n::translate("channel-menu-overview-new-category")
+						} else {
+							crate::i18n::translate("channel-menu-overview-new-channel")
+						}),
+					))
+					.char_limit(100)
+			},
 		)
 		.labelled_by(label.id);
 		if name.changed() {
@@ -962,14 +966,18 @@ impl Dialog {
 		if self.kind == Kind::Edit && matches!(channel.kind, 0 | 5) {
 			ui.add_space(14.0);
 			let label = dialog::label(ui, "channel-menu-overview-topic");
-			let topic = dialog::input(
+			let topic = dialog::bidi_input(
 				ui,
-				egui::TextEdit::multiline(&mut self.draft.topic)
-					.hint_text(crate::i18n::translate(
+				ui.scope_id().with("channel-menu-topic"),
+				&mut self.draft.topic,
+				true,
+				|edit| {
+					edit.hint_text(crate::i18n::translate(
 						"channel-menu-overview-let-everyone-know-how-to-use-this-channel",
 					))
 					.char_limit(1024)
-					.desired_rows(TOPIC_ROWS),
+					.desired_rows(TOPIC_ROWS)
+				},
 			)
 			.labelled_by(label.id);
 			if topic.changed() {

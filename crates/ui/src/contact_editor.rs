@@ -99,26 +99,28 @@ impl ContactEditor {
 						},
 					);
 					ui.add_enabled_ui(!busy, |ui| {
-						let edit = if self.nickname {
-							egui::TextEdit::singleline(&mut self.draft)
-								.align(egui::Align2::LEFT_CENTER)
-						} else {
-							egui::TextEdit::multiline(&mut self.draft).desired_rows(5)
-						};
-						crate::dialog::input(
+						let hint = crate::i18n::translate_if_key(
+							&(if self.nickname {
+								crate::i18n::translate("contact-editor-show-enter-a-nickname")
+							} else {
+								crate::i18n::translate(
+									"contact-editor-show-add-something-to-remember",
+								)
+							}),
+						);
+						crate::dialog::bidi_input(
 							ui,
-							edit.char_limit(limit)
-								.hint_text(crate::i18n::translate_if_key(
-									&(if self.nickname {
-										crate::i18n::translate(
-											"contact-editor-show-enter-a-nickname",
-										)
-									} else {
-										crate::i18n::translate(
-											"contact-editor-show-add-something-to-remember",
-										)
-									}),
-								)),
+							ui.scope_id().with(("contact-editor-draft", self.nickname)),
+							&mut self.draft,
+							!self.nickname,
+							|edit| {
+								let edit = if self.nickname {
+									edit.align(egui::Align2::LEFT_CENTER)
+								} else {
+									edit.desired_rows(5)
+								};
+								edit.char_limit(limit).hint_text(hint)
+							},
 						)
 						.labelled_by(label.id);
 					});

@@ -108,11 +108,12 @@ impl ThreadCreateUi {
 		.show(ctx, |d| {
 			d.content(|ui| {
 				let label = dialog::label(ui, "thread-create-show-thread-name");
-				dialog::input(
+				dialog::bidi_input(
 					ui,
-					egui::TextEdit::singleline(&mut request.name)
-						.align(egui::Align2::LEFT_CENTER)
-						.char_limit(100),
+					ui.scope_id().with(("create-thread-name", channel)),
+					&mut request.name,
+					false,
+					|edit| edit.align(egui::Align2::LEFT_CENTER).char_limit(100),
 				)
 				.labelled_by(label.id);
 				request.name.shrink_to_fit();

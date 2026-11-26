@@ -842,6 +842,7 @@ pub(crate) fn scope(
 			cache.entries.clear();
 			cache.bytes = 0;
 		}
+		crate::composer_text::clear_input_cache(ctx);
 		crate::select::clear(ctx);
 	}
 }

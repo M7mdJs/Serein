@@ -521,24 +521,41 @@ impl Switcher {
 					ui.horizontal_centered(|ui| {
 						ui.spacing_mut().item_spacing.x = 8.0;
 						icons::inline(ui, icons::Icon::Search, 18.0, colors.muted);
-						let input = ui.add(
-							egui::TextEdit::singleline(&mut self.query)
-								.align(egui::Align2::LEFT_CENTER)
-								.id(egui::Id::unique("conversation-switcher-query"))
-								.event_filter(egui::EventFilter {
-									horizontal_arrows: true,
-									vertical_arrows: true,
-									escape: true,
-									..Default::default()
-								})
-								.frame(egui::Frame::NONE)
-								.font(egui::FontId::proportional(16.0))
-								.hint_text(crate::i18n::translate(
-									"switcher-show-where-would-you-like-to-go",
-								))
-								.char_limit(QUERY_CHARS)
-								.desired_width(ui.available_width().max(60.0)),
-						);
+						let switcher_font = egui::FontId::proportional(16.0);
+						let switcher_color = colors.text;
+						let input = crate::composer_text::show_text_edit_with_job(
+							ui,
+							egui::Id::unique("conversation-switcher-query"),
+							&mut self.query,
+							false,
+							move |_ui, value, _width| {
+								let mut job = egui::text::LayoutJob::simple_singleline(
+									value.to_owned(),
+									switcher_font.clone(),
+									switcher_color,
+								);
+								job.wrap.max_rows = 1;
+								job.wrap.max_width = f32::INFINITY;
+								job
+							},
+							|ui, edit| {
+								edit.align(egui::Align2::LEFT_CENTER)
+									.event_filter(egui::EventFilter {
+										horizontal_arrows: true,
+										vertical_arrows: true,
+										escape: true,
+										..Default::default()
+									})
+									.frame(egui::Frame::NONE)
+									.font(egui::FontId::proportional(16.0))
+									.hint_text(crate::i18n::translate(
+										"switcher-show-where-would-you-like-to-go",
+									))
+									.char_limit(QUERY_CHARS)
+									.desired_width(ui.available_width().max(60.0))
+							},
+						)
+						.response;
 						let input =
 							input.accessible_name(crate::i18n::translate("find-conversation"));
 						if self.focus {

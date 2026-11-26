@@ -361,17 +361,23 @@ impl ForumUi {
 						}
 						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
 							icons::inline(ui, icons::Icon::Search, 20.0, colors.muted);
-							let input = ui.add(
-								egui::TextEdit::singleline(&mut self.query)
-									.align(egui::Align2::LEFT_CENTER)
-									.char_limit(MAX_TITLE)
-									.frame(egui::Frame::NONE)
-									.hint_text(crate::i18n::translate(
-										"forum-toolbar-search-or-create-a-post",
-									))
-									.font(egui::TextStyle::Body)
-									.desired_width(ui.available_width().max(60.0)),
-							);
+							let input = crate::composer_text::show_text_edit(
+								ui,
+								ui.scope_id().with("forum-toolbar-query"),
+								&mut self.query,
+								false,
+								|ui, edit| {
+									edit.align(egui::Align2::LEFT_CENTER)
+										.char_limit(MAX_TITLE)
+										.frame(egui::Frame::NONE)
+										.hint_text(crate::i18n::translate(
+											"forum-toolbar-search-or-create-a-post",
+										))
+										.font(egui::TextStyle::Body)
+										.desired_width(ui.available_width().max(60.0))
+								},
+							)
+							.response;
 							let input = input.accessible_name(crate::i18n::translate(
 								"forum-toolbar-search-or-create-a-post",
 							));
@@ -657,27 +663,45 @@ impl ForumUi {
 								ui.spacing_mut().item_spacing.y = 4.0;
 								let title_selection =
 									crate::text_menu::selection_for_menu(ui.ctx(), title_id());
-								let mut title = ui.add(
-									egui::TextEdit::singleline(&mut draft.title)
-										.id(title_id())
-										.align(egui::Align2::LEFT_CENTER)
-										.char_limit(MAX_TITLE)
-										.frame(egui::Frame::NONE)
-										.font(egui::FontId::new(
-											20.0,
-											design::semibold_family(ui.ctx()),
-										))
-										.text_color(colors.text_strong)
-										.hint_text(
-											design::semibold(
-												ui,
-												crate::i18n::translate("forum-composer-title"),
+								let title_font =
+									egui::FontId::new(20.0, design::semibold_family(ui.ctx()));
+								let title_color = colors.text_strong;
+								let mut title = crate::composer_text::show_text_edit_with_job(
+									ui,
+									title_id(),
+									&mut draft.title,
+									false,
+									move |_ui, value, _width| {
+										let mut job = egui::text::LayoutJob::simple_singleline(
+											value.to_owned(),
+											title_font.clone(),
+											title_color,
+										);
+										job.wrap.max_rows = 1;
+										job.wrap.max_width = f32::INFINITY;
+										job
+									},
+									|ui, edit| {
+										edit.align(egui::Align2::LEFT_CENTER)
+											.char_limit(MAX_TITLE)
+											.frame(egui::Frame::NONE)
+											.font(egui::FontId::new(
 												20.0,
+												design::semibold_family(ui.ctx()),
+											))
+											.text_color(colors.text_strong)
+											.hint_text(
+												design::semibold(
+													ui,
+													crate::i18n::translate("forum-composer-title"),
+													20.0,
+												)
+												.color(colors.muted),
 											)
-											.color(colors.muted),
-										)
-										.desired_width(f32::INFINITY),
-								);
+											.desired_width(f32::INFINITY)
+									},
+								)
+								.response;
 								if crate::text_menu::show(
 									&mut title,
 									title_id(),
@@ -696,10 +720,13 @@ impl ForumUi {
 								}
 								let body_selection =
 									crate::text_menu::selection_for_menu(ui.ctx(), body_id());
-								let mut body = ui.add(
-									egui::TextEdit::multiline(&mut draft.body)
-										.id(body_id())
-										.char_limit(
+								let mut body = crate::composer_text::show_text_edit(
+									ui,
+									body_id(),
+									&mut draft.body,
+									true,
+									|_ui, edit| {
+										edit.char_limit(
 											MAX_CONTENT + model::message_options::PREFIX_ALLOWANCE,
 										)
 										.frame(egui::Frame::NONE)
@@ -711,8 +738,10 @@ impl ForumUi {
 											.color(colors.muted),
 										)
 										.desired_rows(3)
-										.desired_width(f32::INFINITY),
-								);
+										.desired_width(f32::INFINITY)
+									},
+								)
+								.response;
 								if crate::text_menu::show(
 									&mut body,
 									body_id(),

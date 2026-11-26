@@ -52,7 +52,35 @@ impl MessagingUi {
 		self.voice_fullscreen.is_some()
 	}
 
-	/// The fullscreen share's call channel, while it is still the tile the stage would show.
+	fn participant_has_video(&self, state: &State, channel: Id, user: Id) -> bool {
+		stage_participants(state, channel).into_iter().any(|entry| {
+			entry.participant.user == user
+				&& self.tile_has_video(state, channel, &Tile::Participant(&entry))
+		})
+	}
+
+	fn stage_focus_can_fullscreen(&self, state: &State, channel: Id) -> bool {
+		let Some(call) = state
+			.voice
+			.active
+			.as_ref()
+			.filter(|c| c.channel == channel && c.phase != Phase::Failed)
+		else {
+			return false;
+		};
+		match self.voice_focus {
+			Some(StageFocus::LocalScreen) => {
+				self.screen.context == Some((state.generation, call.channel, call.request))
+					&& self.screen.busy
+					&& (self.screen.preview.is_some() || self.screen.preview_paused)
+			}
+			Some(StageFocus::Stream(user)) => call.watching == Some(user),
+			Some(StageFocus::Participant(user)) => self.participant_has_video(state, channel, user),
+			None => false,
+		}
+	}
+
+	/// The fullscreen share's or camera's call channel, while it still shows video.
 	fn voice_fullscreen_channel(&self, state: &State) -> Option<Id> {
 		let (focus, _, _, _) = self.voice_fullscreen.as_ref()?;
 		state
@@ -69,7 +97,9 @@ impl MessagingUi {
 								|| self.screen.preview_paused)
 						}
 						StageFocus::Stream(user) => call.watching == Some(*user),
-						StageFocus::Participant(_) => false,
+						StageFocus::Participant(user) => {
+							self.participant_has_video(state, call.channel, *user)
+						}
 					}
 			})
 			.map(|call| call.channel)
@@ -83,7 +113,7 @@ impl MessagingUi {
 			self.exit_voice_fullscreen();
 			return false;
 		};
-		let screen = ctx.content_rect();
+		let screen = ctx.viewport_rect();
 		let id = egui::Id::unique("voice-fullscreen");
 		let mut exit =
 			ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
@@ -91,12 +121,15 @@ impl MessagingUi {
 			.area(
 				egui::Modal::default_area(id)
 					.anchor(egui::Align2::LEFT_TOP, egui::Vec2::ZERO)
+					.fixed_size(screen.size())
+					.constrain(false)
 					.fade_in(false),
 			)
-			.backdrop_color(egui::Color32::BLACK)
+			.backdrop_color(STAGE_FILL)
 			.frame(egui::Frame::NONE)
 			.show(ctx, |ui| {
 				ui.set_min_size(screen.size());
+				ui.set_max_size(screen.size());
 				let rect = egui::Rect::from_min_size(screen.min, screen.size());
 				ui.painter().rect_filled(rect, 0, STAGE_FILL);
 				match focus {
@@ -104,7 +137,14 @@ impl MessagingUi {
 					StageFocus::Stream(user) => {
 						self.stream_tile(ui, state, rect, channel, user, true)
 					}
-					StageFocus::Participant(_) => unreachable!("validated screen share"),
+					StageFocus::Participant(user) => {
+						if let Some(entry) = stage_participants(state, channel)
+							.into_iter()
+							.find(|entry| entry.participant.user == user)
+						{
+							self.participant_tile(ui, state, &entry, rect, true, false);
+						}
+					}
 				}
 				let button = ui.put(
 					egui::Rect::from_min_size(
@@ -742,7 +782,6 @@ impl MessagingUi {
 				let locally_muted = self.voice_user_locally_muted(entry.participant.user);
 				let shown = shown_participant(state, entry);
 				inner.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-					// Deafening implies muted; Discord shows only the headphones then.
 					if shown.deafened || shown.server_deafened {
 						status_icon(
 							ui,
@@ -754,7 +793,8 @@ impl MessagingUi {
 								"voice-voice-participant-deafened"
 							},
 						);
-					} else if shown.muted || shown.server_muted {
+					}
+					if shown.muted || shown.server_muted {
 						status_icon(
 							ui,
 							crate::icons::Icon::MicrophoneSlash,
@@ -1901,10 +1941,18 @@ impl MessagingUi {
 			None
 		};
 		if !frameless {
-			ui.painter().rect_filled(rect, 8, TILE_FILL);
+			ui.painter().rect_filled(
+				rect,
+				8,
+				if video.is_some() {
+					STAGE_FILL
+				} else {
+					TILE_FILL
+				},
+			);
 		}
 		if let Some((id, image, mirror)) = video {
-			cover_image(ui, rect, id, image, mirror);
+			fit_image(ui, rect, id, image, mirror);
 		}
 		let speaking = self.is_speaking(state, entry.channel, &entry.participant);
 		let avatar_size = tile_avatar(size, frameless);
@@ -1942,21 +1990,24 @@ impl MessagingUi {
 		};
 		// Mute state reads as Discord's red ring plus the matching slashed glyph.
 		let shown = shown_participant(state, entry);
-		let silenced = if inactive {
-			None
-		} else if shown.deafened || shown.server_deafened {
-			Some(crate::icons::Icon::HeadphonesSlash)
-		} else if shown.muted || shown.server_muted {
-			Some(crate::icons::Icon::MicrophoneSlash)
-		} else if self.voice_user_locally_muted(entry.participant.user) {
-			// Silenced on this device only; the speaker glyph separates it from a microphone mute.
-			Some(crate::icons::Icon::Speaker)
-		} else {
-			None
-		};
-		if let Some(icon) = silenced
-			&& video.is_none()
-		{
+		let mut silenced_icons = [None; 2];
+		let mut count = 0;
+		if !inactive {
+			if shown.deafened || shown.server_deafened {
+				silenced_icons[count] = Some(crate::icons::Icon::HeadphonesSlash);
+				count += 1;
+			}
+			if shown.muted || shown.server_muted {
+				silenced_icons[count] = Some(crate::icons::Icon::MicrophoneSlash);
+				count += 1;
+			}
+			if count == 0 && self.voice_user_locally_muted(entry.participant.user) {
+				silenced_icons[count] = Some(crate::icons::Icon::Speaker);
+				count += 1;
+			}
+		}
+		let silenced = silenced_icons[0];
+		if !inactive && count > 0 && video.is_none() {
 			ui.painter().circle_stroke(
 				avatar.rect.center(),
 				avatar.rect.width() * 0.5 + 2.0,
@@ -1964,16 +2015,19 @@ impl MessagingUi {
 			);
 			// The badge scales down with small avatars so it never hides the face.
 			let radius = (avatar_size * 0.2).clamp(7.0, 12.0);
-			let badge = avatar.rect.right_bottom() - egui::Vec2::splat(avatar_size * 0.14);
-			ui.painter().circle_filled(badge, radius, STAGE_FILL);
-			ui.painter()
-				.circle_filled(badge, radius - 2.0, colors.badge_fill());
-			crate::icons::paint(
-				ui.painter(),
-				icon,
-				egui::Rect::from_center_size(badge, egui::Vec2::splat(radius)),
-				egui::Color32::WHITE,
-			);
+			let primary_badge = avatar.rect.right_bottom() - egui::Vec2::splat(avatar_size * 0.14);
+			for (idx, icon) in silenced_icons[..count].iter().flatten().enumerate() {
+				let badge = primary_badge - egui::vec2(idx as f32 * (radius * 1.9), 0.0);
+				ui.painter().circle_filled(badge, radius, STAGE_FILL);
+				ui.painter()
+					.circle_filled(badge, radius - 2.0, colors.badge_fill());
+				crate::icons::paint(
+					ui.painter(),
+					*icon,
+					egui::Rect::from_center_size(badge, egui::Vec2::splat(radius)),
+					egui::Color32::WHITE,
+				);
+			}
 		}
 		if silenced.is_none() && speaking {
 			if video.is_none() && frameless {
@@ -2054,11 +2108,15 @@ impl MessagingUi {
 				STAGE_TEXT,
 			);
 		} else {
-			name_badge(
+			name_badge_icons(
 				ui,
 				rect,
 				name,
-				silenced.filter(|_| video.is_some()),
+				if video.is_some() {
+					&silenced_icons[..count]
+				} else {
+					&[]
+				},
 				self.badge_opacity(),
 			);
 		}
@@ -3512,10 +3570,7 @@ impl MessagingUi {
 		let controls = self.controls_enabled(state);
 		let voice_toggles = controls || state.demo;
 		let focused = self.voice_focus.is_some();
-		let screen_focused = matches!(
-			self.voice_focus,
-			Some(StageFocus::LocalScreen | StageFocus::Stream(_))
-		);
+		let can_fullscreen = self.stage_focus_can_fullscreen(state, channel);
 		// Discord's call bar: microphone and camera with their device menus, then share and
 		// more, then the red action; view actions sit at the right edge.
 		let watched = match self.voice_focus {
@@ -3527,7 +3582,7 @@ impl MessagingUi {
 		// share/more) before anything overlaps; mute, camera and hang-up always stay.
 		let actions = 2.0 * 48.0;
 		let essential = 2.0 * 48.0 + BAR_GAP + HANG_UP;
-		let side = [watched.is_some(), focused, screen_focused]
+		let side = [watched.is_some(), focused, can_fullscreen]
 			.iter()
 			.filter(|shown| **shown)
 			.count() as f32
@@ -3732,7 +3787,7 @@ impl MessagingUi {
 				.layout(egui::Layout::right_to_left(egui::Align::Center)),
 		);
 		view.spacing_mut().item_spacing.x = 4.0;
-		if screen_focused && side_shown {
+		if can_fullscreen && side_shown {
 			let fullscreen = fullscreen_control(&mut view, STAGE_TEXT);
 			if fullscreen.clicked() {
 				let previous = view.input(|input| input.viewport().fullscreen.unwrap_or(false));
@@ -4677,8 +4732,8 @@ fn fit_rect(rect: egui::Rect, image: egui::Vec2) -> egui::Rect {
 	egui::Rect::from_center_size(rect.center(), size)
 }
 
-/// Fill the tile edge to edge, cropping the overflow (Discord's camera framing).
-fn cover_image(
+/// Fit image inside `rect` preserving its full aspect ratio (no cropping), with optional mirror.
+fn fit_image(
 	ui: &mut egui::Ui,
 	rect: egui::Rect,
 	id: egui::TextureId,
@@ -4688,24 +4743,20 @@ fn cover_image(
 	if image.x <= 0.0 || image.y <= 0.0 {
 		return;
 	}
-	let scale = (rect.width() / image.x).max(rect.height() / image.y);
-	let shown = egui::vec2(
-		(rect.width() / (image.x * scale)).min(1.0),
-		(rect.height() / (image.y * scale)).min(1.0),
-	);
-	let mut uv = egui::Rect::from_center_size(egui::pos2(0.5, 0.5), shown);
+	let content = fit_rect(rect, image);
+	let mut uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
 	if mirror {
 		std::mem::swap(&mut uv.min.x, &mut uv.max.x);
 	}
 	ui.put(
-		rect,
-		egui::Image::from_texture((id, rect.size()))
+		content,
+		egui::Image::from_texture((id, content.size()))
 			.uv(uv)
 			.corner_radius(8),
 	);
 }
 
-/// Bottom-left translucent name plate, optionally with the mute glyph.
+/// Bottom-left translucent name plate, optionally with a single status glyph.
 fn name_badge(
 	ui: &mut egui::Ui,
 	rect: egui::Rect,
@@ -4713,13 +4764,31 @@ fn name_badge(
 	icon: Option<crate::icons::Icon>,
 	opacity: f32,
 ) {
+	let icons = [icon];
+	name_badge_icons(
+		ui,
+		rect,
+		name,
+		&icons[..usize::from(icon.is_some())],
+		opacity,
+	);
+}
+
+fn name_badge_icons(
+	ui: &mut egui::Ui,
+	rect: egui::Rect,
+	name: &str,
+	icons: &[Option<crate::icons::Icon>],
+	opacity: f32,
+) {
 	if opacity <= 0.0 {
 		return;
 	}
+	let icon_count = icons.iter().filter(|i| i.is_some()).count();
 	let mut painter = ui.painter().clone();
 	painter.multiply_opacity(opacity);
 	let font = egui::FontId::new(13.0, design::medium_family(ui.ctx()));
-	let icon_width = if icon.is_some() { 20.0 } else { 0.0 };
+	let icon_width = icon_count as f32 * 20.0;
 	// One line, truncated with an ellipsis; the tile hover text carries the full name.
 	let mut job = egui::text::LayoutJob::simple_singleline(name.to_owned(), font, STAGE_TEXT);
 	job.wrap.max_width = (rect.width() * 0.6 - icon_width).max(20.0);
@@ -4736,12 +4805,15 @@ fn name_badge(
 		galley,
 		STAGE_TEXT,
 	);
-	if let Some(icon) = icon {
+	for (idx, icon) in icons.iter().flatten().enumerate() {
 		crate::icons::paint(
 			&painter,
-			icon,
+			*icon,
 			egui::Rect::from_center_size(
-				egui::pos2(badge.right() - 14.0, badge.center().y),
+				egui::pos2(
+					badge.right() - 14.0 - (icon_count - 1 - idx) as f32 * 20.0,
+					badge.center().y,
+				),
 				egui::Vec2::splat(14.0),
 			),
 			design::palette(ui).danger,
@@ -7115,5 +7187,63 @@ mod tests {
 			"the lock must fill the speaker slot: {lock:?} vs {:?}",
 			speaker.1
 		);
+	}
+
+	#[test]
+	fn camera_fullscreen_and_fit_rect_preserve_video_without_cropping() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		let channel = state.channels.iter().find(|c| c.kind == 2).unwrap().id;
+		let peer_id = Id(777);
+		state.voice.active = Some(client_core::voice::ActiveCall {
+			channel,
+			request: 1,
+			phase: Phase::Connected,
+			muted: false,
+			deafened: false,
+			server_muted: false,
+			server_deafened: false,
+			camera: false,
+			watching: None,
+			screen_sharing: false,
+			ringing: Vec::new(),
+			participants: Vec::new(),
+			speaking: Vec::new(),
+		});
+		state.voice.roster.push(model::VoiceState {
+			channel,
+			user: peer_id,
+			muted: true,
+			deafened: true,
+			server_muted: false,
+			server_deafened: false,
+			speaking: false,
+			streaming: false,
+			video: true,
+		});
+		let mut view = MessagingUi::default();
+		let texture = ctx.load_texture(
+			"peer-cam",
+			egui::ColorImage::filled([16, 9], egui::Color32::WHITE),
+			egui::TextureOptions::default(),
+		);
+		view.voice_remote_video
+			.push((peer_id, egui::load::SizedTexture::from(&texture)));
+		view.voice_fullscreen = Some((
+			StageFocus::Participant(peer_id),
+			ctx.clone(),
+			false,
+			egui::Id::unique("fs-btn"),
+		));
+		assert_eq!(view.voice_fullscreen_channel(&state), Some(channel));
+		// Fitting 16:9 inside a tall square keeps the entire frame inside bounds.
+		let fitted = fit_rect(
+			egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 200.0)),
+			egui::vec2(160.0, 90.0),
+		);
+		assert!(fitted.width() <= 100.01 && fitted.height() <= 60.0);
+		// Stopping remote video exits camera fullscreen validation.
+		state.voice.roster.last_mut().unwrap().video = false;
+		assert_eq!(view.voice_fullscreen_channel(&state), None);
 	}
 }

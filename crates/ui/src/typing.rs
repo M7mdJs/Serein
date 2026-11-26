@@ -187,17 +187,13 @@ pub(super) fn overlay(
 		);
 	}
 	let text_left = dots_left + 2.0 * DOT_STEP + DOT_RADIUS + 8.0;
-	let mut job = egui::text::LayoutJob::default();
-	job.wrap.max_width = (rect.right() - text_left).max(0.0);
-	job.wrap.max_rows = 1;
-	job.wrap.break_anywhere = true;
 	let strong = crate::design::semibold_family(ui.ctx());
-	for (text, is_name) in &segments {
-		job.append(
-			text,
-			0.0,
-			egui::TextFormat {
-				font_id: egui::FontId::new(
+	let spans: Vec<_> = segments
+		.iter()
+		.map(|(text, is_name)| {
+			(
+				text.clone(),
+				egui::FontId::new(
 					TEXT_SIZE,
 					if *is_name {
 						strong.clone()
@@ -205,18 +201,26 @@ pub(super) fn overlay(
 						egui::FontFamily::Proportional
 					},
 				),
-				color: if *is_name {
+				if *is_name {
 					colors.text_strong
 				} else {
 					colors.muted
 				},
-				..Default::default()
-			},
-		);
-	}
-	let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+			)
+		})
+		.collect();
+	let galley = crate::composer_text::singleline_spans_galley(
+		ui,
+		&spans,
+		(rect.right() - text_left).max(0.0),
+	);
 	let text_pos = egui::pos2(text_left, rect.center().y - galley.size().y / 2.0);
-	painter.galley(text_pos, galley, colors.muted);
+	painter
+		.with_clip_rect(egui::Rect::from_min_max(
+			egui::pos2(text_left, rect.top()),
+			rect.right_bottom(),
+		))
+		.galley(text_pos, galley, colors.muted);
 	response.widget_info(|| {
 		let text: String = segments.iter().map(|(text, _)| text.as_str()).collect();
 		egui::WidgetInfo::labeled(egui::Role::Label, true, text)

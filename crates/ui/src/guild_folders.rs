@@ -900,14 +900,18 @@ impl MessagingUi {
 				d.content(|ui| {
 					let label =
 						crate::dialog::label(ui, "guild-folders-server-folders-folder-name");
-					crate::dialog::input(
+					crate::dialog::bidi_input(
 						ui,
-						egui::TextEdit::singleline(name)
-							.align(egui::Align2::LEFT_CENTER)
-							.hint_text(crate::i18n::translate(
-								"guild-folders-server-folders-folder-name",
-							))
-							.char_limit(100),
+						ui.scope_id().with(("folder-settings-name", *id)),
+						name,
+						false,
+						|edit| {
+							edit.align(egui::Align2::LEFT_CENTER)
+								.hint_text(crate::i18n::translate(
+									"guild-folders-server-folders-folder-name",
+								))
+								.char_limit(100)
+						},
 					)
 					.labelled_by(label.id);
 					ui.add_space(14.0);

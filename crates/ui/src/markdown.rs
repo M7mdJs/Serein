@@ -32,6 +32,53 @@ enum PreviewImage {
 	Channel(crate::icons::Icon),
 }
 
+/// Expand Discord `:shortcode:` aliases (e.g. `:flag_fi:`) in ordinary message text while
+/// leaving custom `<:name:id>` tokens untouched.
+fn expand_shortcodes(text: &str) -> std::borrow::Cow<'_, str> {
+	if !text.contains(':') {
+		return std::borrow::Cow::Borrowed(text);
+	}
+	let bytes = text.as_bytes();
+	let mut out: Option<String> = None;
+	let mut copied = 0;
+	let mut i = 0;
+	while i < bytes.len() {
+		if bytes[i] == b'<'
+			&& let Some((_, len)) = crate::emoji::custom_prefix(&text[i..])
+		{
+			i += len;
+			continue;
+		}
+		if bytes[i] == b':' {
+			let limit = (i + 66).min(bytes.len());
+			if let Some(rel_end) = bytes[i + 1..limit].iter().position(|b| {
+				*b == b':' || !(*b).is_ascii_alphanumeric() && !matches!(b, b'_' | b'-' | b'+')
+			}) {
+				let close = i + 1 + rel_end;
+				if close > i + 1
+					&& bytes[close] == b':'
+					&& let Some(unicode) = crate::emoji_picker::shortcode(&text[i + 1..close])
+				{
+					let buf = out.get_or_insert_with(|| String::with_capacity(text.len()));
+					buf.push_str(&text[copied..i]);
+					buf.push_str(unicode);
+					copied = close + 1;
+					i = copied;
+					continue;
+				}
+			}
+		}
+		i += 1;
+	}
+	match out {
+		Some(mut buf) => {
+			buf.push_str(&text[copied..]);
+			std::borrow::Cow::Owned(buf)
+		}
+		None => std::borrow::Cow::Borrowed(text),
+	}
+}
+
 /// True when the raw source escapes the token at `at` with an odd run of backslashes.
 fn escaped(source: &str, at: usize) -> bool {
 	source[..at]
@@ -3057,7 +3104,22 @@ impl Formatted {
 		response
 	}
 	fn push(&mut self, text: &str, style: Style) {
-		if !text.is_empty() {
+		if text.is_empty() {
+			return;
+		}
+		if !style.code
+			&& style.block.is_none()
+			&& style.mention.is_none()
+			&& style.role.is_none()
+			&& style.game.is_none()
+			&& style.channel.is_none()
+			&& style.timestamp.is_none()
+			&& !style.message_link
+			&& !(style.link.is_some() && bare_url(text).is_some())
+		{
+			self.spans
+				.push((expand_shortcodes(text).into_owned(), style));
+		} else {
 			self.spans.push((text.to_owned(), style));
 		}
 	}
@@ -7060,5 +7122,41 @@ mod tests {
 			"only visible logical matches paint complete shaping-cluster rectangles"
 		);
 		output.drop_without_applying_deltas();
+	}
+
+	#[test]
+	fn discord_emoji_shortcodes_expand_outside_code_urls_and_custom_emoji() {
+		let parsed = Formatted::parse(
+			":flag_fi: `:flag_fi:` <:flag_fi:123456> https://example.com/:flag_fi: \\:flag_fi:",
+		);
+		let plain: String = parsed
+			.spans
+			.iter()
+			.filter(|(_, s)| !s.code && s.link.is_none())
+			.map(|(t, _)| t.as_str())
+			.collect();
+		assert!(plain.contains("🇫🇮"), "plain prose expands :flag_fi:");
+		assert!(
+			plain.contains("<:flag_fi:123456>"),
+			"custom emoji token kept intact"
+		);
+		assert!(
+			plain.contains(":flag_fi:"),
+			"escaped \\:flag_fi: stays literal"
+		);
+		let code: String = parsed
+			.spans
+			.iter()
+			.filter(|(_, s)| s.code)
+			.map(|(t, _)| t.as_str())
+			.collect();
+		assert_eq!(code, ":flag_fi:");
+		let link: String = parsed
+			.spans
+			.iter()
+			.filter(|(_, s)| s.link.is_some())
+			.map(|(t, _)| t.as_str())
+			.collect();
+		assert!(link.contains(":flag_fi:"), "URL path stays literal");
 	}
 }

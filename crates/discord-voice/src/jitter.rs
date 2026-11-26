@@ -1,15 +1,37 @@
-//! Fixed 40ms startup with a bounded reorder window for 2.5?120ms Opus packets.
-const SLOTS: usize = 8;
-#[derive(Default)]
+//! Adaptive 40-80ms jitter buffer with a bounded reorder window for 2.5–120ms Opus packets.
+const SLOTS: usize = 16;
+const MIN_WAIT: u8 = 2;
+const MAX_WAIT: u8 = 4;
+
 pub(crate) struct Jitter {
 	packets: Vec<(u16, Vec<u8>)>,
 	next: Option<u16>,
 	wait: u8,
+	target_wait: u8,
+	steady: u16,
 	missing: u8,
 }
+
+impl Default for Jitter {
+	fn default() -> Self {
+		Self {
+			packets: Vec::new(),
+			next: None,
+			wait: 0,
+			target_wait: MIN_WAIT,
+			steady: 0,
+			missing: 0,
+		}
+	}
+}
+
 impl Jitter {
 	pub fn clear(&mut self) {
-		*self = Self::default();
+		let target_wait = self.target_wait;
+		*self = Self {
+			target_wait,
+			..Self::default()
+		};
 	}
 	pub fn push(&mut self, sequence: u16, opus: Vec<u8>) {
 		if opus.len() > 1275 {
@@ -17,17 +39,34 @@ impl Jitter {
 		}
 		if self.next.is_none() {
 			self.next = Some(sequence);
-			self.wait = 2;
+			self.wait = self.target_wait;
 		}
-		let distance = sequence.wrapping_sub(self.next.unwrap());
+		let next = self.next.unwrap();
+		let distance = sequence.wrapping_sub(next);
 		if distance >= 32768 {
 			return;
 		}
-		if distance >= SLOTS as u16 {
+		if distance > 1 && distance < SLOTS as u16 {
+			// Out-of-order/burst arrival seen: raise target wait gently on the next reset.
+			self.target_wait = self.target_wait.max(3);
+			self.steady = 0;
+		}
+		if distance >= SLOTS as u16 * 4 {
 			self.packets.clear();
 			self.next = Some(sequence);
-			self.wait = 2;
+			self.target_wait = MIN_WAIT;
+			self.wait = self.target_wait;
 			self.missing = 0;
+			self.steady = 0;
+		} else if distance >= SLOTS as u16 {
+			// Moderate burst jump: slide `next` forward instead of wiping valid ahead frames.
+			let new_next = sequence.wrapping_sub((SLOTS - 1) as u16);
+			self.packets
+				.retain(|(id, _)| id.wrapping_sub(new_next) < SLOTS as u16);
+			self.next = Some(new_next);
+			self.missing = 0;
+			self.target_wait = MAX_WAIT;
+			self.steady = 0;
 		}
 		if self.packets.len() < SLOTS && !self.packets.iter().any(|(id, _)| *id == sequence) {
 			self.packets.push((sequence, opus));
@@ -36,7 +75,7 @@ impl Jitter {
 	/// An empty packet requests Opus packet-loss concealment, at most three consecutive packets.
 	pub fn pop(&mut self) -> Option<Vec<u8>> {
 		if self.wait > 0 {
-			// Short packets can fill the fixed window before 40ms. Start before
+			// Short packets can fill the fixed window before startup finishes. Start before
 			// the next arrival would repeatedly reset a full window.
 			if self.packets.len() < SLOTS {
 				self.wait -= 1;
@@ -48,9 +87,15 @@ impl Jitter {
 		self.next = Some(next.wrapping_add(1));
 		if let Some(index) = self.packets.iter().position(|(id, _)| *id == next) {
 			self.missing = 0;
+			self.steady = self.steady.saturating_add(1);
+			if self.steady >= 250 && self.target_wait > MIN_WAIT {
+				self.target_wait -= 1;
+				self.steady = 0;
+			}
 			return Some(self.packets.swap_remove(index).1);
 		}
 		self.missing += 1;
+		self.steady = 0;
 		if self.missing > 3 {
 			// Stop concealing the gap, but retain speech that already arrived after it.
 			if let Some((index, (sequence, _))) = self
@@ -61,7 +106,12 @@ impl Jitter {
 			{
 				self.next = Some(sequence.wrapping_add(1));
 				self.missing = 0;
+				self.target_wait = (self.target_wait + 1).min(MAX_WAIT);
 				return Some(self.packets.swap_remove(index).1);
+			}
+			// Buffer underran after an unrecovered gap: keep extra wait room if jittery.
+			if self.target_wait < MAX_WAIT {
+				self.target_wait += 1;
 			}
 			self.clear();
 			return None;
@@ -122,5 +172,25 @@ mod tests {
 		}
 		jitter.push(1000, vec![0; 1276]);
 		assert!(jitter.packets.len() <= SLOTS);
+	}
+	#[test]
+	fn moderate_burst_slides_window_without_wiping_ahead_frames() {
+		let mut jitter = Jitter::default();
+		jitter.push(0, vec![0]);
+		// Burst jump within 4x window keeps recent ahead frames intact.
+		for seq in 17..=20 {
+			jitter.push(seq, vec![seq as u8]);
+		}
+		assert!(jitter.pop().is_none());
+		assert!(jitter.pop().is_none());
+		let mut recovered = Vec::new();
+		for _ in 0..20 {
+			if let Some(pkt) = jitter.pop()
+				&& !pkt.is_empty()
+			{
+				recovered.push(pkt[0]);
+			}
+		}
+		assert_eq!(recovered, vec![17, 18, 19, 20]);
 	}
 }

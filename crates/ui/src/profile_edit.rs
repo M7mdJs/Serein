@@ -525,18 +525,16 @@ fn field(
 	let colors = design::palette(ui);
 	let counter = multiline.then(|| format!("{} / {limit}", value.chars().count()));
 	let label_id = field_label(ui, label, counter);
-	let edit = if multiline {
-		egui::TextEdit::multiline(value).desired_rows(BIO_ROWS)
-	} else {
-		egui::TextEdit::singleline(value).align(egui::Align2::LEFT_CENTER)
-	};
-	design::input(
-		ui,
-		edit.id(egui::Id::unique(id))
-			.char_limit(limit)
+	design::bidi_input(ui, egui::Id::unique(id), value, multiline, move |edit| {
+		let edit = if multiline {
+			edit.desired_rows(BIO_ROWS)
+		} else {
+			edit.align(egui::Align2::LEFT_CENTER)
+		};
+		edit.char_limit(limit)
 			.font(field_font())
-			.text_color(colors.text),
-	)
+			.text_color(colors.text)
+	})
 	.labelled_by(label_id);
 }
 
