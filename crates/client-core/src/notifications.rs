@@ -169,6 +169,34 @@ impl Activity {
 			.unwrap_or(0)
 			.saturating_add(if mentions_only { counts.1 } else { counts.0 })
 	}
+	/// Activity count adjusted for an optimistic forward read marker not yet confirmed by HTTP.
+	pub(crate) fn count_with_optimistic(
+		&self,
+		channel: Id,
+		optimistic: Option<Id>,
+		latest: Option<Id>,
+		mentions_only: bool,
+	) -> u32 {
+		let Some(after) = optimistic else {
+			return self.count(channel, mentions_only);
+		};
+		let post = self
+			.observed
+			.iter()
+			.filter(|(c, id, mention, _, _)| {
+				*c == channel && *id > after && (!mentions_only || *mention)
+			})
+			.count();
+		let baseline = if latest
+			.max(self.high_water.get(&channel).copied())
+			.is_some_and(|l| l <= after)
+		{
+			0
+		} else {
+			self.counts.get(&channel).copied().unwrap_or(0)
+		};
+		baseline.saturating_add(u32::try_from(post).unwrap_or(u32::MAX))
+	}
 }
 
 #[derive(Clone, Default)]
@@ -711,7 +739,11 @@ impl State {
 	/// until the Gateway count arrives. This is not an exact total unread count.
 	pub fn unread_count(&self, channel: Id) -> u32 {
 		if self.can_view(channel) {
-			self.read_state.activity.count(channel, false)
+			let optimistic = self.read_state.optimistic_marker(channel);
+			let latest = self.channel(channel).and_then(|c| c.last_message);
+			self.read_state
+				.activity
+				.count_with_optimistic(channel, optimistic, latest, false)
 		} else {
 			0
 		}
@@ -720,7 +752,11 @@ impl State {
 		// Most channels have no mentions; skip the permission lookup for those.
 		let count = self.read_state.activity.count(channel, true);
 		if count > 0 && self.can_view(channel) {
-			count
+			let optimistic = self.read_state.optimistic_marker(channel);
+			let latest = self.channel(channel).and_then(|c| c.last_message);
+			self.read_state
+				.activity
+				.count_with_optimistic(channel, optimistic, latest, true)
 		} else {
 			0
 		}

@@ -446,6 +446,7 @@ impl ChannelMenu {
 					if let Some(command) = state.prepare_mark_channel_read(id) {
 						commands.push(command);
 					}
+					ctx.request_repaint();
 				}
 				Intent::List(listed) => {
 					if let Some(command) = state.change_channel_list(

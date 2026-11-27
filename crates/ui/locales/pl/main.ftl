@@ -169,6 +169,9 @@ friends-presence-unavailable = Obecność niedostępna
 friends-message = Wiadomość
 friends-no-open-dm = Brak otwartych wiadomości bezpośrednich z tym znajomym
 friends-more = Więcej
+friends-active-now = Aktywni teraz
+friends-active-quiet = Na razie tu cicho...
+friends-active-quiet-detail = Gdy znajomy rozpocznie aktywność, np. uruchomi grę lub wejdzie na kanał głosowy, zobaczysz ją tutaj.
 
 # Semantic application strings. Keys stay stable when English copy changes.
 

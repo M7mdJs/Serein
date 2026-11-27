@@ -169,6 +169,9 @@ friends-presence-unavailable = 无法取得在线状态
 friends-message = 消息
 friends-no-open-dm = 与这位朋友尚无已打开的私信
 friends-more = 更多
+friends-active-now = 当前活动
+friends-active-quiet = 暂时很安静……
+friends-active-quiet-detail = 当好友开始游玩游戏或加入语音频道等活动时，会在这里显示。
 
 # Semantic application strings. Keys stay stable when English copy changes.
 

@@ -3,7 +3,9 @@ use crate::{
 	auth::{AuthState, Failure},
 };
 use model::{Freshness, Id, Patch};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+
+const MAX_QUEUED_ACKS: usize = 64;
 
 pub enum Event {
 	Snapshot {
@@ -100,6 +102,22 @@ impl Scope {
 	}
 }
 
+enum QueuedAck {
+	Channel {
+		channel: Id,
+		message: Id,
+		epoch: u64,
+	},
+	Guild {
+		guild: Id,
+		channels: Vec<(Id, u64, Id)>,
+	},
+	Bulk {
+		scope: Scope,
+		channels: Vec<(Id, u64, Id)>,
+	},
+}
+
 #[derive(Default)]
 pub struct ReadState {
 	pub(crate) activity: crate::notifications::Activity,
@@ -108,6 +126,7 @@ pub struct ReadState {
 	version: Option<u64>,
 	revision: u64,
 	pending: Option<Pending>,
+	queued: VecDeque<QueuedAck>,
 	/// A capped or reconnect-interrupted bulk acknowledgement asks for its next batch.
 	continue_all: Option<Scope>,
 	pub(crate) status: Option<(Id, &'static str)>,
@@ -124,6 +143,45 @@ impl ReadState {
 	pub(crate) fn busy(&self) -> bool {
 		self.pending.is_some()
 	}
+	pub(crate) fn optimistic_marker(&self, channel: Id) -> Option<Id> {
+		let current_epoch = self.entries.get(&channel).map_or(0, |(_, epoch)| *epoch);
+		let active = match &self.pending {
+			Some(Pending::Channel {
+				channel: pending,
+				message,
+				epoch,
+				manual: false,
+				..
+			}) if *pending == channel && *epoch == current_epoch => Some(*message),
+			Some(Pending::Guild { channels, .. }) => channels
+				.iter()
+				.find(|(pending, epoch, _)| *pending == channel && *epoch == current_epoch)
+				.map(|(_, _, message)| *message),
+			Some(Pending::All { channels, .. }) => channels
+				.iter()
+				.flatten()
+				.find(|(pending, epoch, _)| *pending == channel && *epoch == current_epoch)
+				.map(|(_, _, message)| *message),
+			_ => None,
+		};
+		let queued = self
+			.queued
+			.iter()
+			.filter_map(|item| match item {
+				QueuedAck::Channel {
+					channel: pending,
+					message,
+					epoch,
+				} if *pending == channel && *epoch == current_epoch => Some(*message),
+				QueuedAck::Guild { channels, .. } | QueuedAck::Bulk { channels, .. } => channels
+					.iter()
+					.find(|(pending, epoch, _)| *pending == channel && *epoch == current_epoch)
+					.map(|(_, _, message)| *message),
+				_ => None,
+			})
+			.max();
+		active.max(queued)
+	}
 	pub fn status(&self, channel: Id) -> Option<&'static str> {
 		self.status
 			.filter(|(id, _)| *id == channel)
@@ -138,6 +196,7 @@ impl ReadState {
 	/// Drops pending work; an interrupted bulk acknowledgement resumes once reads can start again.
 	pub fn cancel(&mut self) {
 		self.activity.clear_notifications();
+		self.queued.clear();
 		if let Some(Pending::All { scope, .. }) = self.pending.take() {
 			self.continue_all = Some(scope);
 		}
@@ -149,6 +208,15 @@ impl ReadState {
 		if self.status(channel).is_some() {
 			self.status = None;
 		}
+		self.queued.retain_mut(|item| match item {
+			QueuedAck::Channel {
+				channel: pending, ..
+			} => *pending != channel,
+			QueuedAck::Guild { channels, .. } | QueuedAck::Bulk { channels, .. } => {
+				channels.retain(|(id, ..)| *id != channel);
+				!channels.is_empty()
+			}
+		});
 		let cancel = match self.pending.as_mut() {
 			Some(Pending::Channel {
 				channel: pending, ..
@@ -182,11 +250,17 @@ impl State {
 		{
 			return None;
 		}
-		(self.read_state.known || self.read_state.entries.contains_key(&channel)).then(|| {
-			self.read_state
+		let optimistic = self.read_state.optimistic_marker(channel);
+		(self.read_state.known
+			|| self.read_state.entries.contains_key(&channel)
+			|| optimistic.is_some())
+		.then(|| {
+			let confirmed = self
+				.read_state
 				.entries
 				.get(&channel)
-				.and_then(|(id, _)| *id)
+				.and_then(|(id, _)| *id);
+			confirmed.max(optimistic)
 		})
 	}
 	pub fn unread(&self, channel: Id) -> Option<bool> {
@@ -200,8 +274,10 @@ impl State {
 		{
 			return None;
 		}
+		let optimistic = self.read_state.optimistic_marker(channel.id);
 		let read = match self.read_state.entries.get(&channel.id) {
-			Some((id, _)) => *id,
+			Some((id, _)) => (*id).max(optimistic),
+			None if optimistic.is_some() => optimistic,
 			None if self.read_state.known && matches!(channel.kind, 10..=12) => None,
 			None => return None,
 		};
@@ -391,14 +467,28 @@ impl State {
 	pub fn can_mark_channel_read(&self, channel: Id) -> bool {
 		self.auth == AuthState::Authenticated
 			&& self.gateway_connected
-			&& self.read_state.pending.is_none()
 			&& self.unread(channel) == Some(true)
+			&& (self.read_state.pending.is_none() || self.read_state.queued.len() < MAX_QUEUED_ACKS)
 	}
 	pub fn prepare_mark_channel_read(&mut self, channel: Id) -> Option<crate::Command> {
 		if !self.can_mark_channel_read(channel) {
 			return None;
 		}
 		let message = self.channel(channel)?.last_message?;
+		if self.read_state.pending.is_some() {
+			let epoch = self
+				.read_state
+				.entries
+				.get(&channel)
+				.map_or(0, |(_, epoch)| *epoch);
+			self.read_state.queued.push_back(QueuedAck::Channel {
+				channel,
+				message,
+				epoch,
+			});
+			self.read_state.status = None;
+			return None;
+		}
 		Some(self.mark_read_command(channel, message, false, None))
 	}
 	/// Leaving a channel acknowledges the latest message the reader had on screen there,
@@ -535,7 +625,7 @@ impl State {
 	pub fn can_mark_guild_read(&self, guild: Id) -> bool {
 		self.auth == AuthState::Authenticated
 			&& self.gateway_connected
-			&& self.read_state.pending.is_none()
+			&& (self.read_state.pending.is_none() || self.read_state.queued.len() < MAX_QUEUED_ACKS)
 			&& self.guilds.iter().any(|g| g.id == guild)
 			&& self.channels.iter().any(|channel| {
 				channel.guild == Some(guild) && self.unread(channel.id) == Some(true)
@@ -550,6 +640,13 @@ impl State {
 			.take(crate::MAX_NAV)
 			.collect::<Vec<_>>();
 		if channels.is_empty() {
+			return None;
+		}
+		if self.read_state.pending.is_some() {
+			self.read_state
+				.queued
+				.push_back(QueuedAck::Guild { guild, channels });
+			self.read_state.status = None;
 			return None;
 		}
 		self.read_state.revision = self.read_state.revision.wrapping_add(1);
@@ -582,7 +679,7 @@ impl State {
 	fn can_bulk_ack(&self, scope: &Scope) -> bool {
 		self.auth == AuthState::Authenticated
 			&& self.gateway_connected
-			&& self.read_state.pending.is_none()
+			&& (self.read_state.pending.is_none() || self.read_state.queued.len() < MAX_QUEUED_ACKS)
 			&& self.unread_acks(scope).next().is_some()
 	}
 	pub fn can_mark_all_read(&self) -> bool {
@@ -612,6 +709,13 @@ impl State {
 				.collect::<Vec<_>>();
 			(channels, unread.next().is_some())
 		};
+		if self.read_state.pending.is_some() {
+			self.read_state
+				.queued
+				.push_back(QueuedAck::Bulk { scope, channels });
+			self.read_state.status = None;
+			return None;
+		}
 		self.read_state.revision = self.read_state.revision.wrapping_add(1);
 		let request = self.read_state.revision;
 		let acks = channels
@@ -631,18 +735,32 @@ impl State {
 			channels: acks,
 		})
 	}
-	/// Next batch after a capped bulk acknowledgement succeeded or a reconnect interrupted one.
+	/// Next batch after a capped bulk acknowledgement succeeded, a reconnect interrupted one, or
+	/// additional explicit mark-read clicks arrived while a prior acknowledgement was in flight.
 	pub fn continue_mark_all_read(&mut self) -> Option<crate::Command> {
 		// Kept while another read or a reconnect is in progress.
-		if self.read_state.continue_all.is_none()
-			|| self.auth != AuthState::Authenticated
+		if self.auth != AuthState::Authenticated
 			|| !self.gateway_connected
 			|| self.read_state.pending.is_some()
 		{
 			return None;
 		}
-		let scope = self.read_state.continue_all.take()?;
-		self.prepare_bulk_ack(scope)
+		if let Some(scope) = self.read_state.continue_all.take()
+			&& let Some(command) = self.prepare_bulk_ack(scope)
+		{
+			return Some(command);
+		}
+		while let Some(queued) = self.read_state.queued.pop_front() {
+			let command = match queued {
+				QueuedAck::Channel { channel, .. } => self.prepare_mark_channel_read(channel),
+				QueuedAck::Guild { guild, .. } => self.prepare_mark_guild_read(guild),
+				QueuedAck::Bulk { scope, .. } => self.prepare_bulk_ack(scope),
+			};
+			if let Some(command) = command {
+				return Some(command);
+			}
+		}
+		None
 	}
 	pub fn pending_all_ack(&self, request: u64) -> bool {
 		matches!(
@@ -805,7 +923,17 @@ impl State {
 				self.read_state
 					.entries
 					.insert(channel, (message, self.read_state.revision));
-				if !manual {
+				if manual {
+					self.read_state.queued.retain_mut(|item| match item {
+						QueuedAck::Channel {
+							channel: queued, ..
+						} => *queued != channel,
+						QueuedAck::Guild { channels, .. } | QueuedAck::Bulk { channels, .. } => {
+							channels.retain(|(id, ..)| *id != channel);
+							!channels.is_empty()
+						}
+					});
+				} else {
 					let revision = self.read_state.revision;
 					let advance = |epoch: &mut u64, target: Id| {
 						if *epoch == previous_epoch && message.is_none_or(|id| id < target) {
@@ -2170,5 +2298,50 @@ mod navigation_tests {
 			assert!(!state.can_load_newer());
 			assert_eq!(state.search_target, Some(Id(50)));
 		}
+	}
+
+	#[test]
+	fn explicit_mark_read_clears_unread_optimistically_queues_clicks_and_rolls_back_on_error() {
+		let mut state = with_unread_dms(2);
+		state.read_state.activity.set_count(Id(1), 3);
+		state.read_state.activity.set_count(Id(2), 2);
+		assert_eq!(state.unread(Id(1)), Some(true));
+		assert_eq!(state.unread_count(Id(1)), 3);
+
+		let Some(Command::MarkRead {
+			channel,
+			message,
+			request,
+			..
+		}) = state.prepare_mark_channel_read(Id(1))
+		else {
+			panic!("expected MarkRead for Id(1)");
+		};
+		assert_eq!(state.unread(Id(1)), Some(false));
+		assert_eq!(state.read_marker(Id(1)), Some(Some(Id(500))));
+		assert_eq!(state.unread_count(Id(1)), 0);
+
+		// A consecutive click on another channel applies optimistically and queues behind `Id(1)`.
+		assert!(state.can_mark_channel_read(Id(2)));
+		assert!(state.prepare_mark_channel_read(Id(2)).is_none());
+		assert_eq!(state.unread(Id(2)), Some(false));
+		assert_eq!(state.unread_count(Id(2)), 0);
+		assert!(!state.can_mark_channel_read(Id(2)));
+
+		// Failing `Id(1)` rolls `Id(1)` back without dropping `Id(2)` from the drain queue.
+		state
+			.apply_read_state(Event::Result {
+				channel,
+				message,
+				request,
+				result: Err(Failure::RateLimited),
+			})
+			.unwrap();
+		assert_eq!(state.unread(Id(1)), Some(true));
+		assert_eq!(state.unread_count(Id(1)), 3);
+		assert!(matches!(
+			state.continue_mark_all_read(),
+			Some(Command::MarkRead { channel: Id(2), .. })
+		));
 	}
 }

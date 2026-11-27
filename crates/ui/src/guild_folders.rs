@@ -974,10 +974,11 @@ impl MessagingUi {
 				commands.push(command);
 			}
 		}
-		if let Some(guilds) = self.server_menu.mark_read_folder_requested.take()
-			&& let Some(command) = state.prepare_mark_guilds_read(&guilds)
-		{
-			commands.push(command);
+		if let Some(guilds) = self.server_menu.mark_read_folder_requested.take() {
+			if let Some(command) = state.prepare_mark_guilds_read(&guilds) {
+				commands.push(command);
+			}
+			ui.ctx().request_repaint();
 		}
 	}
 }

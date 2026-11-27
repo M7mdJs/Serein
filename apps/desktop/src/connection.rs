@@ -464,6 +464,8 @@ impl Connection {
                 }));
                 // Keep hangup/mute controls responsive while an HTTP message write is awaiting Discord.
                 let (write_send,mut write_receive)=mpsc::channel::<(Command,Option<(u64,Instant)>)>(COMMAND_SLOTS);
+                // Keep read-state acknowledgements off the message/upload write lane so clicks never wait behind sends or typing.
+                let (ack_send,mut ack_receive)=mpsc::channel::<Command>(COMMAND_SLOTS);
                 let write_order=Arc::new(WriteOrder::default());
                 let writer_order=write_order.clone();
                 let write_api=api.clone();let write_emit=emit.clone();let write_finished=finished.clone();let write_wake=wake.clone();
@@ -473,7 +475,25 @@ impl Connection {
                         let event=write_api.execute_write(command,|nonce|{let _=write_emit(Event::SendThrottled{nonce:nonce.to_owned()});write_wake.request_repaint();}).await;
                         let failure=match &event {Event::TypingSent(Err(f)) if f.ends_session() && *f!=Failure::Capacity=>Some(*f),Event::Interaction(client_core::interactions::Event::Submitted{result:Err(f),..})=>Some(*f),Event::MessagingPermissions{result:Err(f),..}=>Some(*f),Event::ChannelAction(client_core::channel_actions::Event::Finished{result:Err(f),..})=>Some(*f),Event::ServerAdmin(client_core::server_admin::Event{result:Err(f),..})=>Some(*f),Event::ServerSettings(client_core::server_settings::Event{result:Err(f),..})=>Some(*f),Event::Onboarding(client_core::onboarding::Event::Loaded{result:Err(f),..}|client_core::onboarding::Event::Submitted{result:Err(f),..})=>Some(*f),Event::Failure(f)=>Some(*f),Event::ProfileEdited{result:Err(f),..} if *f != Failure::Capacity =>Some(*f),Event::Edited{result:Err(f),..}|Event::Pinned{result:Err(f),..}=>Some(*f),Event::GuildFolders(Err(f))=>Some(*f),Event::JoinInvite{result:Err(f),..}|Event::GuildCreated{result:Err(f),..}=>Some(*f),Event::SendResult{result:Err(f),..}=>Some(*f),Event::UserAction(client_core::user_actions::Event::Written{result:Err(f),..})=>Some(*f),Event::UserAction(client_core::user_actions::Event::DmOpened{result:Err(f),..})=>Some(*f),Event::ServerAction(client_core::server_actions::Event::Written{result:Err(f),..})=>Some(*f),Event::ServerAction(client_core::server_actions::Event::InviteSent{result:Err(f),..})=>Some(*f),Event::GroupAction(client_core::group_actions::Event::Written{result:Err(f),..})=>Some(*f),Event::Reactions(client_core::reactions::Event::Written{result:Err(f),..})=>Some(*f),Event::ReadState(client_core::read_state::Event::Result{result:Err(f),..})=>Some(*f),_=>None};
                         let error=write_emit(event).err().or(failure.filter(|f|f.ends_session()));
-                        if let Some(error)=error {write_api.stop_with(error);publish_terminal(&write_finished, write_api.stop_reason().unwrap_or(error));write_wake.request_repaint();break;}
+                        write_wake.request_repaint();
+                        if let Some(error)=error {write_api.stop_with(error);publish_terminal(&write_finished, write_api.stop_reason().unwrap_or(error));break;}
+                    }
+                }));
+                let ack_api=api.clone();let ack_emit=emit.clone();let ack_finished=finished.clone();let ack_wake=wake.clone();
+                let mut acks=AbortTask(tokio::spawn(async move {
+                    while let Some(command)=ack_receive.recv().await {
+                        let event=ack_api.execute_write(command,|_|{}).await;
+                        let failure=match &event {
+                            Event::ReadState(
+                                client_core::read_state::Event::Result{result:Err(f),..}
+                                |client_core::read_state::Event::GuildAck{result:Err(f),..}
+                                |client_core::read_state::Event::AllAck{result:Err(f),..},
+                            ) if f.ends_session()=>Some(*f),
+                            _=>None,
+                        };
+                        let error=ack_emit(event).err().or(failure);
+                        ack_wake.request_repaint();
+                        if let Some(error)=error {ack_api.stop_with(error);publish_terminal(&ack_finished, ack_api.stop_reason().unwrap_or(error));break;}
                     }
                 }));
                 let mut history:Option<AbortTask>=None;
@@ -506,6 +526,7 @@ impl Connection {
                         failure=api.terminal_failure()=>{return Err(failure);}
                         _=&mut gateway_task.0=>{break;}
                         _=&mut writes.0=>{break;}
+                        _=&mut acks.0=>{break;}
                         changed=recipient_scope_changed.changed()=> {
                             if changed.is_err() {break;}
                             recipient_scope_changed.borrow_and_update();
@@ -922,6 +943,13 @@ impl Connection {
                                     if let Err(f)=emit(event){api.stop_with(f);publish_terminal(&finished, api.stop_reason().unwrap_or(f));}
                                     history_wake.request_repaint();
                                 })));
+                            } else if matches!(
+                                command,
+                                Command::MarkRead { .. }
+                                    | Command::MarkGuildRead { .. }
+                                    | Command::MarkAllRead { .. }
+                            ) {
+                                ack_send.try_send(command).map_err(|_|Failure::Capacity)?;
                             } else {
                                 if matches!(command,Command::Send{..}) {write_order.invalidate_typing();}
                                 write_send.try_send((command,None)).map_err(|_|Failure::Capacity)?;

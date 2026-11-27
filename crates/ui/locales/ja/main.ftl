@@ -169,6 +169,9 @@ friends-presence-unavailable = プレゼンスが利用できません
 friends-message = メッセージ
 friends-no-open-dm = この友人とのオープンなダイレクト メッセージはありません
 friends-more = もっと
+friends-active-now = アクティブなフレンド
+friends-active-quiet = 今は静かです...
+friends-active-quiet-detail = フレンドがゲームをプレイしたりボイスチャンネルに参加したりすると、ここに表示されます。
 
 # Semantic application strings. Keys stay stable when English copy changes.
 

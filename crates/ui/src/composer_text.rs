@@ -1783,20 +1783,44 @@ pub(crate) fn singleline_galley(
 	color: Color32,
 	max_width: f32,
 ) -> Arc<egui::Galley> {
-	if has_rtl(&text)
-		&& let Some(rtl) = crate::rtl::layout(
-			ui.ctx(),
-			&[crate::rtl::Span {
-				text: text.clone(),
-				format: TextFormat::simple(font.clone(), color),
-				action: 0,
-				object: None,
-				copy: false,
-			}],
-			f32::INFINITY,
-		) && let Some(line) = rtl.lines.first()
-	{
-		return line.galley.clone();
+	if has_rtl(&text) {
+		let make_rtl = |sample: &str| {
+			crate::rtl::layout(
+				ui.ctx(),
+				&[crate::rtl::Span {
+					text: sample.to_owned(),
+					format: TextFormat::simple(font.clone(), color),
+					action: 0,
+					object: None,
+					copy: false,
+				}],
+				f32::INFINITY,
+			)
+			.and_then(|rtl| rtl.lines.into_iter().next().map(|line| line.galley))
+		};
+		if let Some(full) = make_rtl(&text) {
+			if !max_width.is_finite() || full.size().x <= max_width.max(1.0) {
+				return full;
+			}
+			let limit = max_width.max(1.0);
+			let boundaries: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+			let mut lo = 0usize;
+			let mut hi = boundaries.len().saturating_sub(1);
+			let mut best = make_rtl("\u{2026}").unwrap_or(full);
+			while lo < hi {
+				let mid = lo + (hi - lo + 1) / 2;
+				let candidate = format!("{}\u{2026}", &text[..boundaries[mid]]);
+				if let Some(galley) = make_rtl(&candidate)
+					&& galley.size().x <= limit
+				{
+					best = galley;
+					lo = mid;
+				} else {
+					hi = mid - 1;
+				}
+			}
+			return best;
+		}
 	}
 	let mut job = LayoutJob::simple_singleline(text, font, color);
 	job.wrap.max_width = max_width.max(1.0);
@@ -2501,5 +2525,18 @@ mod tests {
 		frame(0.0, &mut single, vec![]);
 		frame(0.1, &mut single, vec![egui::Event::Text("!".into())]);
 		assert!(single.contains('!') && has_rtl(&single));
+
+		let truncated = ctx
+			.run_ui(Default::default(), |ui| {
+				singleline_galley(
+					ui,
+					"صلي على النبي وبارك عليه دائما وأبدا في كل وقت".into(),
+					egui::FontId::proportional(12.0),
+					egui::Color32::WHITE,
+					90.0,
+				)
+			})
+			.inner;
+		assert!(truncated.size().x <= 91.0 && truncated.job.text.contains('\u{2026}'));
 	}
 }

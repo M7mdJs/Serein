@@ -172,6 +172,9 @@ friends-presence-unavailable = 접속 상태를 확인할 수 없음
 friends-message = 메시지
 friends-no-open-dm = 이 친구와 열린 다이렉트 메시지가 없습니다
 friends-more = 더 보기
+friends-active-now = 현재 활동 중
+friends-active-quiet = 지금은 조용하네요...
+friends-active-quiet-detail = 친구가 게임을 하거나 음성 채널에 참여하면 여기에 표시됩니다.
 
 # Semantic application strings. Keys stay stable when English copy changes.
 

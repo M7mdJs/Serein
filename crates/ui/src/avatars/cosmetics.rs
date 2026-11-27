@@ -253,6 +253,16 @@ impl Avatars {
 			.tint(tint)
 			.corner_radius(radius)
 			.paint_at(ui, visible);
+		if !dim {
+			// Soft left-side scrim keeps names and status legible over bright nameplate art.
+			let [r, g, b, _] = ui.visuals().panel_fill.to_srgba_unmultiplied();
+			painter.add(horizontal_gradient(
+				visible,
+				f32::from(radius),
+				Color32::from_rgba_unmultiplied(r, g, b, 175),
+				Color32::from_rgba_unmultiplied(r, g, b, 0),
+			));
+		}
 	}
 
 	/// Whether the effect can start playing: motion is allowed and every layer has settled, with

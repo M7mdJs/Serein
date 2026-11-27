@@ -1968,11 +1968,12 @@ impl MessagingUi {
 				None
 			}
 			Action::MarkChannelRead => {
-				commands.extend(
-					state
-						.selected
-						.and_then(|channel| state.prepare_mark_channel_read(channel)),
-				);
+				if let Some(channel) = state.selected {
+					if let Some(command) = state.prepare_mark_channel_read(channel) {
+						commands.push(command);
+					}
+					ctx.request_repaint();
+				}
 				None
 			}
 			Action::OpenEmojiPicker if composer_open => {
@@ -2921,38 +2922,56 @@ impl MessagingUi {
 														egui::Sense::hover(),
 														true,
 													);
-													ui.add(
-														egui::Label::new(
-															RichText::new(
-																if !self
-																	.own_presence
-																	.custom_status
-																	.is_empty()
-																{
-																	self.own_presence
-																		.custom_status
-																		.clone()
-																} else if let Some(game) = self
-																	.own_game
-																	.as_deref()
-																	.filter(|_| {
-																		self.share_game_activity
-																	}) {
-																	game.to_owned()
-																} else if state.demo {
-																	language.text("offline-preview")
-																} else if state.gateway_connected {
-																	language.text(account_menu::presence_status_key(self.shown_presence_status()))
-																} else {
-																	language.text("reconnecting")
-																},
-															)
-															.size(12.0)
-															.color(colors.muted),
+													let status_text = if !self
+														.own_presence
+														.custom_status
+														.is_empty()
+													{
+														self.own_presence.custom_status.clone()
+													} else if let Some(game) = self
+														.own_game
+														.as_deref()
+														.filter(|_| self.share_game_activity)
+													{
+														game.to_owned()
+													} else if state.demo {
+														language.text("offline-preview")
+													} else if state.gateway_connected {
+														language.text(
+															account_menu::presence_status_key(
+																self.shown_presence_status(),
+															),
 														)
-														.truncate()
-														.selectable(false),
-													);
+													} else {
+														language.text("reconnecting")
+													};
+													if composer_text::has_rtl(&status_text) {
+														let width = (identity_right
+															- ui.cursor().left())
+														.max(24.0);
+														let galley =
+															composer_text::singleline_galley(
+																ui,
+																status_text,
+																egui::FontId::proportional(12.0),
+																colors.muted,
+																width,
+															);
+														ui.add(
+															egui::Label::new(galley)
+																.selectable(false),
+														);
+													} else {
+														ui.add(
+															egui::Label::new(
+																RichText::new(status_text)
+																	.size(12.0)
+																	.color(colors.muted),
+															)
+															.truncate()
+															.selectable(false),
+														);
+													}
 												})
 												.response;
 											let identity = ui
@@ -5803,15 +5822,17 @@ impl MessagingUi {
 		{
 			commands.push(command);
 		}
-		if let Some(guild) = self.server_menu.mark_read_requested.take()
-			&& let Some(command) = state.prepare_mark_guild_read(guild)
-		{
-			commands.push(command);
+		if let Some(guild) = self.server_menu.mark_read_requested.take() {
+			if let Some(command) = state.prepare_mark_guild_read(guild) {
+				commands.push(command);
+			}
+			ctx.request_repaint();
 		}
-		if std::mem::take(&mut self.server_menu.mark_all_read_requested)
-			&& let Some(command) = state.prepare_mark_all_read()
-		{
-			commands.push(command);
+		if std::mem::take(&mut self.server_menu.mark_all_read_requested) {
+			if let Some(command) = state.prepare_mark_all_read() {
+				commands.push(command);
+			}
+			ctx.request_repaint();
 		}
 		if let Some(command) = state.continue_mark_all_read() {
 			commands.push(command);
@@ -6634,6 +6655,7 @@ impl MessagingUi {
 			if let Some(command) = state.prepare_mark_channel_read(channel) {
 				commands.push(command);
 			}
+			ctx.request_repaint();
 		}
 		if let Some(message) = self.timeline.mark_unread.take() {
 			self.timeline.mark_read = None;
@@ -6641,6 +6663,7 @@ impl MessagingUi {
 				self.timeline.browse_away();
 				self.timeline.reset_unread_divider();
 				commands.push(command);
+				ctx.request_repaint();
 			}
 		} else if let Some(message) = self.timeline.mark_read.take() {
 			if !settings_open
@@ -6648,6 +6671,7 @@ impl MessagingUi {
 				&& let Some(command) = state.prepare_mark_read(message)
 			{
 				commands.push(command);
+				ctx.request_repaint();
 			} else if self.timeline.auto_read_attempt == Some(message) {
 				// A suppressed action never reached the worker; allow it after the overlay closes.
 				self.timeline.auto_read_attempt = None;

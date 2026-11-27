@@ -1,11 +1,11 @@
 //! Friends overview using the retained relationship/presence state and existing user actions.
 use crate::{
-	MessagingUi, design,
+	MessagingUi, composer_text, design,
 	icons::{self, Icon},
 	profiles, user_menu,
 };
 use client_core::{Command, State};
-use egui::{Color32, RichText, vec2};
+use egui::{Color32, RichText, Stroke, vec2};
 
 #[derive(Default)]
 pub(super) struct Friends {
@@ -497,6 +497,62 @@ impl MessagingUi {
 					});
 				});
 		}
+		let show_active_now = ui.available_width() >= 700.0;
+		let (active_dm, active_join) = if show_active_now {
+			let total = ui.available_width();
+			let active_width = (total * 0.34).clamp(300.0, 360.0);
+			let list_width = (total - active_width - 1.0).max(360.0);
+			let height = ui.available_height();
+			ui.horizontal_top(|ui| {
+				ui.spacing_mut().item_spacing.x = 0.0;
+				ui.allocate_ui_with_layout(
+					vec2(list_width, height),
+					egui::Layout::top_down(egui::Align::Min),
+					|ui| {
+						ui.set_min_width(list_width);
+						self.friends_tab_body(ui, state, commands);
+					},
+				);
+				let (rule, _) =
+					ui.allocate_exact_size(vec2(1.0, height.max(1.0)), egui::Sense::hover());
+				ui.painter().vline(
+					rule.center().x,
+					rule.y_range(),
+					Stroke::new(1.0, colors.border),
+				);
+				ui.allocate_ui_with_layout(
+					vec2(active_width, height),
+					egui::Layout::top_down(egui::Align::Min),
+					|ui| {
+						ui.set_min_width(active_width);
+						self.active_now_panel(ui, state)
+					},
+				)
+				.inner
+			})
+			.inner
+		} else {
+			self.friends_tab_body(ui, state, commands);
+			(None, None)
+		};
+		if let Some(user) = active_dm
+			&& let Some(command) = state.open_friend_dm(user)
+		{
+			commands.push(command);
+		}
+		if let Some((guild, channel)) = active_join
+			&& let Err(reason) = self.join_from_profile(state, guild, channel, commands)
+		{
+			self.toasts.push(design::Level::Error, reason);
+		}
+	}
+
+	fn friends_tab_body(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		commands: &mut Vec<Command>,
+	) {
 		if self.friends.tab == Tab::Add {
 			self.add_friend_page(ui, state, commands);
 			return;
@@ -505,6 +561,8 @@ impl MessagingUi {
 			self.friend_requests_page(ui, state, commands);
 			return;
 		}
+		let colors = design::palette(ui);
+		let language = self.language;
 		let voice_users = profiles::voice_users(state);
 		let mut selected = None;
 		egui::Frame::new()
@@ -688,21 +746,35 @@ impl MessagingUi {
 								text.spacing_mut().interact_size.y = 0.0;
 								text.horizontal(|ui| {
 									ui.spacing_mut().item_spacing.x = 6.0;
-									ui.add(
-										egui::Label::new(
-											design::semibold(
-												ui,
-												state.user_display_name(user),
-												15.0,
-											)
-											.color(colors.text_strong),
-										)
-										.truncate()
-										.selectable(false),
-									);
+									let display = state.user_display_name(user);
 									let username = restricted
 										.map(|(_, name, _)| name.as_str())
 										.or_else(|| state.friend_username(user.id));
+									let reserved =
+										if hot && username.is_some() { 96.0 } else { 0.0 };
+									let max_name = (ui.available_width() - reserved).max(40.0);
+									if composer_text::has_rtl(&display) {
+										let galley = composer_text::singleline_galley(
+											ui,
+											display,
+											egui::FontId::new(
+												15.0,
+												design::semibold_family(ui.ctx()),
+											),
+											colors.text_strong,
+											max_name,
+										);
+										ui.add(egui::Label::new(galley).selectable(false));
+									} else {
+										ui.add(
+											egui::Label::new(
+												design::semibold(ui, display, 15.0)
+													.color(colors.text_strong),
+											)
+											.truncate()
+											.selectable(false),
+										);
+									}
 									if hot && let Some(username) = username {
 										ui.add(
 											egui::Label::new(
@@ -749,14 +821,27 @@ impl MessagingUi {
 											colors.positive,
 										);
 									}
-									ui.add(
-										egui::Label::new(
-											RichText::new(&subtitle).size(13.0).color(colors.muted),
+									let sub_resp = if composer_text::has_rtl(&subtitle) {
+										let galley = composer_text::singleline_galley(
+											ui,
+											subtitle.clone(),
+											egui::FontId::proportional(13.0),
+											colors.muted,
+											ui.available_width().max(24.0),
+										);
+										ui.add(egui::Label::new(galley).selectable(false))
+									} else {
+										ui.add(
+											egui::Label::new(
+												RichText::new(&subtitle)
+													.size(13.0)
+													.color(colors.muted),
+											)
+											.truncate()
+											.selectable(false),
 										)
-										.truncate()
-										.selectable(false),
-									)
-									.on_hover_text(&subtitle);
+									};
+									sub_resp.on_hover_text(&subtitle);
 								});
 								let mut actions = ui.new_child(
 									egui::UiBuilder::new()
@@ -806,6 +891,333 @@ impl MessagingUi {
 			commands.push(command);
 		}
 	}
+
+	/// Right-hand Discord-style Active Now panel displaying friends currently playing, streaming,
+	/// listening, or in voice.
+	fn active_now_panel(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+	) -> (Option<model::Id>, Option<(model::Id, model::Id)>) {
+		let colors = design::palette(ui);
+		let language = self.language;
+		let active = active_friend_cards(state, self.calls_unavailable(state));
+		let mut selected_dm = None;
+		let mut join_voice = None;
+		egui::Frame::new()
+			.inner_margin(egui::Margin::symmetric(16, 16))
+			.show(ui, |ui| {
+				ui.label(
+					design::semibold(ui, language.text("friends-active-now"), 18.0)
+						.color(colors.text_strong),
+				);
+				ui.add_space(12.0);
+				if active.is_empty() {
+					egui::Frame::new()
+						.fill(colors.raised)
+						.stroke(Stroke::new(1.0, colors.border))
+						.corner_radius(12)
+						.inner_margin(18)
+						.show(ui, |ui| {
+							ui.set_width(ui.available_width());
+							ui.vertical_centered(|ui| {
+								ui.label(
+									design::semibold(
+										ui,
+										language.text("friends-active-quiet"),
+										15.0,
+									)
+									.color(colors.text_strong),
+								);
+								ui.add_space(6.0);
+								ui.add(
+									egui::Label::new(
+										RichText::new(language.text("friends-active-quiet-detail"))
+											.size(13.0)
+											.color(colors.muted),
+									)
+									.wrap(),
+								);
+							});
+						});
+					return;
+				}
+				self.scroll
+					.attach(
+						ui,
+						"friends-active-now",
+						egui::ScrollArea::vertical().auto_shrink([false, false]),
+					)
+					.show(ui, |ui| {
+						ui.spacing_mut().item_spacing.y = 10.0;
+						for entry in active {
+							let user = entry.user;
+							let can_message = state.channels.iter().any(|c| {
+								c.guild.is_none()
+									&& c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id)
+							}) || (!state.user_action_pending()
+								&& (state.demo
+									|| (state.gateway_connected
+										&& state.auth
+											== client_core::auth::AuthState::Authenticated)));
+							ui.push_id(("active-now", user.id.0), |ui| {
+								let frame = egui::Frame::new()
+									.fill(colors.raised)
+									.stroke(Stroke::new(1.0, colors.border))
+									.corner_radius(12)
+									.inner_margin(12)
+									.show(ui, |ui| {
+										ui.set_width(ui.available_width());
+										ui.horizontal(|ui| {
+											ui.spacing_mut().item_spacing.x = 10.0;
+											let avatar =
+												self.avatars.show_plain(ui, user, 32.0, state.demo);
+											if let Some(status) = entry.status {
+												profiles::presence_badge(
+													ui,
+													avatar.rect,
+													status,
+													entry.clients,
+													colors.raised,
+												);
+											}
+											self.profile.person_click(ui, &avatar, None, user);
+											user_menu::show(
+												&avatar,
+												state,
+												user,
+												user_menu::Place::Nowhere,
+												&mut self.profile,
+												&mut self.user_action,
+											);
+											ui.with_layout(
+												egui::Layout::right_to_left(egui::Align::Center),
+												|ui| {
+													let msg_btn = ui
+														.add_enabled_ui(can_message, |ui| {
+															round_action(
+																ui,
+																Icon::Threads,
+																&language.text("friends-message"),
+																colors.text_strong,
+															)
+														})
+														.inner;
+													if msg_btn.clicked() {
+														selected_dm = Some(user.id);
+													}
+													ui.with_layout(
+														egui::Layout::top_down(egui::Align::Min),
+														|ui| {
+															ui.spacing_mut().item_spacing.y = 1.0;
+															let display =
+																state.user_display_name(user);
+															let max_w =
+																ui.available_width().max(24.0);
+															let name_resp =
+																if composer_text::has_rtl(&display)
+																{
+																	let galley = composer_text::singleline_galley(
+																		ui,
+																		display,
+																		egui::FontId::new(
+																			14.0,
+																			design::semibold_family(
+																				ui.ctx(),
+																			),
+																		),
+																		colors.text_strong,
+																		max_w,
+																	);
+																	ui.add(
+																		egui::Label::new(galley)
+																			.sense(
+																				egui::Sense::click(
+																				),
+																			)
+																			.selectable(false),
+																	)
+																} else {
+																	ui.add(
+																		egui::Label::new(
+																			design::semibold(
+																				ui, display, 14.0,
+																			)
+																			.color(
+																				colors.text_strong,
+																			),
+																		)
+																		.truncate()
+																		.sense(egui::Sense::click())
+																		.selectable(false),
+																	)
+																};
+															self.profile.person_click(
+																ui, &name_resp, None, user,
+															);
+															user_menu::show(
+																&name_resp,
+																state,
+																user,
+																user_menu::Place::Nowhere,
+																&mut self.profile,
+																&mut self.user_action,
+															);
+															let summary = profiles::subtitle(
+																None,
+																entry.activities,
+															)
+															.or_else(|| {
+																entry.spot.as_ref().map(|spot| {
+																	format!(
+																		"{} \u{2014} {}",
+																		spot.channel.name,
+																		spot.guild.name
+																	)
+																})
+															})
+															.unwrap_or_default();
+															if !summary.is_empty() {
+																let summary_resp =
+																	if composer_text::has_rtl(
+																		&summary,
+																	) {
+																		let galley = composer_text::singleline_galley(
+																		ui,
+																		summary.clone(),
+																		egui::FontId::proportional(
+																			12.0,
+																		),
+																		colors.muted,
+																		max_w,
+																	);
+																		ui.add(
+																			egui::Label::new(
+																				galley,
+																			)
+																			.selectable(false),
+																		)
+																	} else {
+																		ui.add(
+																			egui::Label::new(
+																				RichText::new(
+																					&summary,
+																				)
+																				.size(12.0)
+																				.color(colors.muted),
+																			)
+																			.truncate()
+																			.selectable(false),
+																		)
+																	};
+																summary_resp
+																	.on_hover_text(&summary);
+															}
+														},
+													);
+												},
+											);
+										});
+										if !entry.activities.is_empty() {
+											ui.add_space(8.0);
+											profiles::activity_list(
+												ui,
+												egui::Id::unique((
+													"active-now-activity",
+													user.id.0,
+												)),
+												entry.activities,
+												&mut self.avatars,
+												state.demo,
+												(colors.chat, colors.muted),
+											);
+										}
+										if let Some(spot) = &entry.spot {
+											ui.add_space(8.0);
+											if let Some(profiles::Action::JoinVoice {
+												guild,
+												channel,
+											}) = profiles::voice_card_for_surface(
+												ui,
+												state,
+												user,
+												spot,
+												&mut self.avatars,
+												colors.chat,
+											) {
+												join_voice = Some((guild, channel));
+											}
+										}
+									});
+								if frame.response.hovered() {
+									ui.painter().rect_stroke(
+										frame.response.rect,
+										12,
+										Stroke::new(
+											1.0,
+											design::mix(colors.border, colors.text, 0.18),
+										),
+										egui::StrokeKind::Inside,
+									);
+								}
+							});
+						}
+					});
+			});
+		(selected_dm, join_voice)
+	}
+}
+
+struct ActiveFriend<'a> {
+	user: &'a model::User,
+	status: Option<&'a str>,
+	activities: &'a [model::RichActivity],
+	clients: model::ClientPlatforms,
+	spot: Option<profiles::VoiceSpot<'a>>,
+}
+
+/// Collects friends currently active (in a server voice channel or sharing a Rich Presence
+/// activity), excluding blocked users and sorting voice/activity entries ahead of plain names.
+fn active_friend_cards<'a>(
+	state: &'a State,
+	calls_blocked: Option<&'static str>,
+) -> Vec<ActiveFriend<'a>> {
+	let mut cards: Vec<_> = state
+		.friends()
+		.filter(|user| state.user_blocked(user.id) != Some(true))
+		.filter_map(|user| {
+			let (status, _, activities, clients) = profiles::presence(state, user.id, None);
+			let status = profiles::shown_status(state, user.id, status);
+			let spot = (!user.webhook && profiles::user_in_voice(state, user.id))
+				.then(|| profiles::voice_spot(state, user.id, calls_blocked))
+				.flatten();
+			let online_activity =
+				matches!(status, Some("online" | "idle" | "dnd")) && !activities.is_empty();
+			(online_activity || spot.is_some()).then_some(ActiveFriend {
+				user,
+				status,
+				activities,
+				clients,
+				spot,
+			})
+		})
+		.collect();
+	cards.sort_unstable_by(|a, b| {
+		(
+			a.spot.is_none(),
+			a.activities.is_empty(),
+			state.user_display_name(a.user).to_lowercase(),
+			a.user.id,
+		)
+			.cmp(&(
+				b.spot.is_none(),
+				b.activities.is_empty(),
+				state.user_display_name(b.user).to_lowercase(),
+				b.user.id,
+			))
+	});
+	cards.truncate(48);
+	cards
 }
 
 /// List heading aligned with the row content inset.
@@ -870,7 +1282,7 @@ fn person_row(
 		ui.painter().hline(
 			egui::Rangef::new(rect.left() + 10.0, rect.right() - 10.0),
 			rect.top(),
-			egui::Stroke::new(1.0, colors.border),
+			egui::Stroke::new(1.0, colors.border.gamma_multiply(0.65)),
 		);
 	}
 	(rect, response, hot)
@@ -1308,5 +1720,114 @@ mod tests {
 			assert_eq!(friends.list, restored);
 			check_cache(&mut friends, &state);
 		}
+	}
+
+	#[test]
+	fn active_now_collects_active_and_quiet_friends_and_renders_activity_cards() {
+		let mut state = test_support::friends_demo_state();
+		let friend_id = state.friends().next().expect("demo friend").id;
+		apply(
+			&mut state,
+			Event::DirectPresence(vec![client_core::presence::Update {
+				user: friend_id,
+				avatar: Patch::Absent,
+				status: Patch::Value("online".into()),
+				custom_status: Patch::Null,
+				activities: Patch::Value(vec![model::RichActivity {
+					kind: 0,
+					name: "Synthetic game".into(),
+					details: Some("Ranked match".into()),
+					state: None,
+					image: None,
+					small_image: None,
+					ends_at: None,
+					started_at: None,
+				}]),
+				clients: Patch::Absent,
+			}]),
+		);
+		let cards = active_friend_cards(&state, None);
+		assert!(cards.iter().any(|c| c.user.id == friend_id));
+
+		let mut collect_text = |shape: &egui::Shape, out: &mut Vec<String>| {
+			let mut stack = vec![shape];
+			while let Some(next) = stack.pop() {
+				match next {
+					egui::Shape::Text(t) => out.push(t.galley.job.text.clone()),
+					egui::Shape::Vec(v) => stack.extend(v.iter()),
+					_ => {}
+				}
+			}
+		};
+
+		let ctx = egui::Context::default();
+		let mut ui_view = MessagingUi::default();
+		let mut commands = Vec::new();
+		let active_out = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1000.0, 680.0),
+				)),
+				..Default::default()
+			},
+			|ui| ui_view.friends_page(ui, &mut state, &mut commands),
+		);
+		let mut active_texts = Vec::new();
+		for clipped in &active_out.shapes {
+			collect_text(&clipped.shape, &mut active_texts);
+		}
+		active_out.drop_without_applying_deltas();
+		assert!(active_texts.iter().any(|t| t == "Active Now"));
+		assert!(active_texts.iter().any(|t| t == "Synthetic game"));
+
+		// Blocking an active friend removes them from Active Now immediately.
+		apply(
+			&mut state,
+			Event::UserAction(Relationship::Relationship {
+				user: friend_id,
+				blocked: true,
+			}),
+		);
+		assert!(
+			active_friend_cards(&state, None)
+				.iter()
+				.all(|c| c.user.id != friend_id)
+		);
+
+		// Clearing presences renders the quiet Active Now empty card cleanly.
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::DirectPresence(
+				state
+					.friends()
+					.map(|u| client_core::presence::Update {
+						user: u.id,
+						avatar: Patch::Absent,
+						status: Patch::Value("online".into()),
+						custom_status: Patch::Null,
+						activities: Patch::Null,
+						clients: Patch::Absent,
+					})
+					.collect(),
+			),
+		});
+		assert!(active_friend_cards(&state, None).is_empty());
+		let quiet_out = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1000.0, 680.0),
+				)),
+				..Default::default()
+			},
+			|ui| ui_view.friends_page(ui, &mut state, &mut commands),
+		);
+		let mut quiet_texts = Vec::new();
+		for clipped in &quiet_out.shapes {
+			collect_text(&clipped.shape, &mut quiet_texts);
+		}
+		quiet_out.drop_without_applying_deltas();
+		assert!(quiet_texts.iter().any(|t| t.contains("quiet")));
 	}
 }

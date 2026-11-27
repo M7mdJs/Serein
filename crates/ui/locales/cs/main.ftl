@@ -172,6 +172,9 @@ friends-presence-unavailable = Stav není dostupný
 friends-message = Zpráva
 friends-no-open-dm = S tímto přítelem není otevřena přímá zpráva
 friends-more = Další
+friends-active-now = Aktivní teď
+friends-active-quiet = Zatím je tu ticho...
+friends-active-quiet-detail = Až přítel spustí aktivitu, třeba hru nebo hlasový hovor, uvidíte ji tady.
 
 # Semantic application strings. Keys stay stable when English copy changes.
 

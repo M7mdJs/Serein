@@ -172,6 +172,9 @@ friends-presence-unavailable = Hiện diện không có sẵn
 friends-message = Tin nhắn
 friends-no-open-dm = Không có tin nhắn trực tiếp mở với người bạn này
 friends-more = Thêm
+friends-active-now = Đang hoạt động
+friends-active-quiet = Hiện tại khá yên ắng...
+friends-active-quiet-detail = Khi bạn bè bắt đầu một hoạt động như chơi game hoặc vào kênh thoại, hoạt động đó sẽ hiện ở đây.
 
 # Semantic application strings. Keys stay stable when English copy changes.
 

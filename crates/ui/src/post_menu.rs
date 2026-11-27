@@ -374,6 +374,7 @@ impl PostMenu {
 					if let Some(command) = state.prepare_mark_channel_read(id) {
 						commands.push(command);
 					}
+					ctx.request_repaint();
 				}
 				Intent::Write(action) => {
 					let on_fail =

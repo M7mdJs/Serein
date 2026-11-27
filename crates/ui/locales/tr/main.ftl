@@ -169,6 +169,9 @@ friends-presence-unavailable = İletişim durumu mevcut değil
 friends-message = Mesaj
 friends-no-open-dm = Bu arkadaşla açık doğrudan mesaj yok
 friends-more = Daha
+friends-active-now = Şimdi Aktif
+friends-active-quiet = Şimdilik burası sessiz...
+friends-active-quiet-detail = Bir arkadaşın oyun oynamak veya sesli kanala katılmak gibi bir etkinlik başlattığında burada görünür.
 
 # Semantic application strings. Keys stay stable when English copy changes.
 
