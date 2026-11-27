@@ -1141,7 +1141,8 @@ impl State {
 			return;
 		}
 		if self
-			.read_marker(message.channel)
+			.read_state
+			.row(message.channel)
 			.flatten()
 			.is_some_and(|read| message.id <= read)
 		{
