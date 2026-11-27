@@ -250,7 +250,7 @@ impl SearchUi {
 						ui.make_persistent_id("conversation-search-query"),
 						&mut self.query,
 						false,
-						|ui, value, width| filters::highlight(ui, value, width),
+						filters::highlight,
 						|edit| {
 							edit.align(egui::Align2::LEFT_CENTER)
 								.char_limit(256)
