@@ -272,7 +272,7 @@ impl MessagingUi {
 			);
 			let mut header_bottom = avatar.bottom();
 			if let Some(profile) = &state.own_profile.data {
-				let catalog = state.badges.as_ref();
+				let catalog = profile.badge_catalog.as_deref();
 				let icon_badges: Vec<_> = model::badges::displayed_badges(&profile.badges, catalog)
 					.into_iter()
 					.filter(|b| b.icon_key().is_some())

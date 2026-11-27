@@ -985,24 +985,19 @@ impl MessagingUi {
 											ui.with_layout(
 												egui::Layout::right_to_left(egui::Align::Center),
 												|ui| {
-													if let Some(icon) =
+													if let Some((activity, icon)) =
 														entry.activities.first().and_then(|a| {
 															a.image
 																.as_ref()
 																.or(a.small_image.as_ref())
+																.map(|icon| (a, icon))
 														}) {
-														let media = model::EmbedMedia {
-															url: Some(icon.clone()),
-															width: 24,
-															height: 24,
-															..Default::default()
-														};
-														self.avatars.show_media(
+														self.avatars.show_icon(
 															ui,
-															&media,
-															egui::vec2(24.0, 24.0),
+															Some(icon.key()),
+															24.0,
 															state.demo,
-															crate::avatars::Surface::Inline,
+															&activity.name,
 														);
 													} else if can_message {
 														let (btn_rect, btn_resp) = ui
@@ -1122,18 +1117,12 @@ impl MessagingUi {
 																.as_ref()
 																.or(activity.small_image.as_ref())
 															{
-																let media = model::EmbedMedia {
-																	url: Some(icon.clone()),
-																	width: 30,
-																	height: 30,
-																	..Default::default()
-																};
-																self.avatars.show_media(
+																self.avatars.show_icon(
 																	ui,
-																	&media,
-																	egui::vec2(30.0, 30.0),
+																	Some(icon.key()),
+																	30.0,
 																	state.demo,
-																	crate::avatars::Surface::Inline,
+																	&activity.name,
 																);
 															}
 															ui.vertical(|ui| {
@@ -1235,7 +1224,7 @@ impl MessagingUi {
 														});
 														let click = ui.interact(
 															row.response.rect,
-															ui.id().with((
+															ui.scope_id().with((
 																"active-voice-join",
 																spot.channel.id.0,
 															)),
