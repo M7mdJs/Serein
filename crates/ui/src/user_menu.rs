@@ -214,7 +214,11 @@ pub(super) fn contents(
 		.button(crate::i18n::translate("user-menu-contents-profile"))
 		.clicked()
 	{
-		profile.command_open(user.clone());
+		if matches!(place, Place::Nowhere) && !user.webhook {
+			profile.open_full(user.clone());
+		} else {
+			profile.command_open(user.clone());
+		}
 		ui.close();
 	}
 	if !user.webhook

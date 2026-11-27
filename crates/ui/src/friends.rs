@@ -721,12 +721,26 @@ impl MessagingUi {
 								);
 								let layout =
 									RowLayout::new(rect, if restricted.is_none() { 2 } else { 1 });
-								let avatar = self.avatars.show_plain(
-									&mut ui
-										.new_child(egui::UiBuilder::new().max_rect(layout.avatar)),
+								let avatar = self
+									.avatars
+									.show_plain(
+										&mut ui.new_child(
+											egui::UiBuilder::new().max_rect(layout.avatar),
+										),
+										user,
+										40.0,
+										state.demo,
+									)
+									.interact(egui::Sense::click())
+									.on_hover_cursor(egui::CursorIcon::PointingHand);
+								self.profile.person_click_full(ui, &avatar, user);
+								user_menu::show(
+									&avatar,
+									state,
 									user,
-									40.0,
-									state.demo,
+									user_menu::Place::Nowhere,
+									&mut self.profile,
+									&mut self.user_action,
 								);
 								if let Some(status) = status {
 									profiles::presence_badge(
@@ -945,8 +959,11 @@ impl MessagingUi {
 										ui.spacing_mut().item_spacing.y = 6.0;
 										ui.horizontal(|ui| {
 											ui.spacing_mut().item_spacing.x = 8.0;
-											let avatar =
-												self.avatars.show_plain(ui, user, 32.0, state.demo);
+											let avatar = self
+												.avatars
+												.show_plain(ui, user, 32.0, state.demo)
+												.interact(egui::Sense::click())
+												.on_hover_cursor(egui::CursorIcon::PointingHand);
 											if let Some(status) = entry.status {
 												profiles::presence_badge(
 													ui,
@@ -956,7 +973,7 @@ impl MessagingUi {
 													colors.raised,
 												);
 											}
-											self.profile.person_click(ui, &avatar, None, user);
+											self.profile.person_click_full(ui, &avatar, user);
 											user_menu::show(
 												&avatar,
 												state,
@@ -1041,8 +1058,8 @@ impl MessagingUi {
 																	max_w,
 																	egui::Sense::click(),
 																);
-															self.profile.person_click(
-																ui, &name_resp, None, user,
+															self.profile.person_click_full(
+																ui, &name_resp, user,
 															);
 															user_menu::show(
 																&name_resp,

@@ -2885,15 +2885,74 @@ fn full_panel(
 							));
 							let expanded =
 								ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
-							for game in
-								widget
-									.games
-									.iter()
-									.take(if expanded { usize::MAX } else { 2 })
-							{
-								board_game(ui, game, avatars, state.demo, theme);
+							let grid_cols = if widget.games.len() >= 3 {
+								if ui.available_width() >= 420.0 { 4 } else { 3 }
+							} else {
+								0
+							};
+							let initial_limit = if grid_cols > 0 { grid_cols } else { 2 };
+							let visible: Vec<_> = widget
+								.games
+								.iter()
+								.take(if expanded { usize::MAX } else { initial_limit })
+								.collect();
+							if grid_cols > 0 {
+								for row in visible.chunks(grid_cols) {
+									let gap = 10.0;
+									let total_gap = gap * (grid_cols.saturating_sub(1)) as f32;
+									let tile_w = ((ui.available_width() - total_gap)
+										/ grid_cols as f32)
+										.max(64.0);
+									let cover_size = vec2(tile_w, (tile_w * 4.0 / 3.0).round());
+									ui.horizontal_top(|ui| {
+										ui.spacing_mut().item_spacing.x = gap;
+										for game in row {
+											ui.allocate_ui_with_layout(
+												vec2(tile_w, cover_size.y + 38.0),
+												egui::Layout::top_down(egui::Align::Min),
+												|ui| {
+													ui.spacing_mut().item_spacing.y = 6.0;
+													let name =
+														game.name.clone().unwrap_or_else(|| {
+															format!("Game {}", game.id)
+														});
+													let cover = avatars.show_cover(
+														ui,
+														game.cover_key(),
+														cover_size,
+														state.demo,
+														&name,
+													);
+													let label = ui.add(
+														egui::Label::new(
+															RichText::new(&name)
+																.size(13.0)
+																.strong()
+																.color(theme.text),
+														)
+														.truncate(),
+													);
+													let mut tip = name;
+													if let Some(comment) = game
+														.comment
+														.as_deref()
+														.filter(|c| !c.trim().is_empty())
+													{
+														tip.push('\n');
+														tip.push_str(comment);
+													}
+													cover.union(label).on_hover_text(tip);
+												},
+											);
+										}
+									});
+								}
+							} else {
+								for game in visible {
+									board_game(ui, game, avatars, state.demo, theme);
+								}
 							}
-							if widget.games.len() > 2 {
+							if widget.games.len() > initial_limit {
 								let label = crate::i18n::translate(if expanded {
 									"profiles-board-show-less"
 								} else {
@@ -3118,6 +3177,22 @@ impl ProfileSession {
 		nested: Option<&egui::Response>,
 		user: &User,
 	) {
+		self.person_click_mode(ui, primary, nested, user, false);
+	}
+
+	/// Like [`Self::person_click`], but opens the full profile modal (as from Friends list/tab).
+	pub fn person_click_full(&mut self, ui: &egui::Ui, primary: &egui::Response, user: &User) {
+		self.person_click_mode(ui, primary, None, user, true);
+	}
+
+	fn person_click_mode(
+		&mut self,
+		ui: &egui::Ui,
+		primary: &egui::Response,
+		nested: Option<&egui::Response>,
+		user: &User,
+		open_full: bool,
+	) {
 		let arm = match nested {
 			Some(nested) if nested.contains_pointer() => Some(nested),
 			_ if primary.contains_pointer() => Some(primary),
@@ -3145,7 +3220,7 @@ impl ProfileSession {
 			self.pending.push(ProfileEffect::ClearCore);
 		}
 		self.reset_card_input();
-		self.full = false;
+		self.full = open_full && !user.webhook;
 		self.open = Some(user.clone());
 	}
 
