@@ -1808,7 +1808,7 @@ pub(crate) fn singleline_galley(
 			let mut hi = boundaries.len().saturating_sub(1);
 			let mut best = make_rtl("\u{2026}").unwrap_or(full);
 			while lo < hi {
-				let mid = lo + (hi - lo + 1) / 2;
+				let mid = lo + (hi - lo).div_ceil(2);
 				let candidate = format!("{}\u{2026}", &text[..boundaries[mid]]);
 				if let Some(galley) = make_rtl(&candidate)
 					&& galley.size().x <= limit
