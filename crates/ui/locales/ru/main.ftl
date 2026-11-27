@@ -4962,3 +4962,6 @@ group-add-title = Добавить друзей в ЛС
 group-add-subtitle = Выберите друга, которого нужно добавить в эту группу.
 group-add-full = Эта группа достигла лимита в 10 человек.
 group-add-confirm = Добавить друга
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

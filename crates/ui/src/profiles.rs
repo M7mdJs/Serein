@@ -572,19 +572,6 @@ fn voice_card(
 	action
 }
 
-/// Renders [`voice_card`] outside a profile sheet using the surrounding palette colors.
-pub(crate) fn voice_card_for_surface(
-	ui: &mut egui::Ui,
-	state: &State,
-	user: &User,
-	spot: &VoiceSpot,
-	avatars: &mut Avatars,
-	fill: Color32,
-) -> Option<Action> {
-	let theme = Theme::new(&design::palette(ui), None);
-	voice_card(ui, state, user, spot, avatars, (&theme, fill))
-}
-
 /// Why the card's Join is disabled, ready to show. It refuses whatever the join path refuses:
 /// the session-wide reasons in `calls_blocked` (shown as the call buttons show them), any call
 /// this device holds in that channel, failed ones included (those are dismissed from the call

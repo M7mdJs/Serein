@@ -5080,3 +5080,6 @@ group-add-title = Přidat přátele do soukromé konverzace
 group-add-subtitle = Vyberte přítele, kterého chcete přidat do této skupiny.
 group-add-full = Tato skupina dosáhla limitu 10 osob.
 group-add-confirm = Přidat přítele
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

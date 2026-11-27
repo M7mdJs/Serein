@@ -5271,3 +5271,6 @@ group-add-title = Thêm bạn vào tin nhắn trực tiếp
 group-add-subtitle = Chọn một người bạn để thêm vào nhóm này.
 group-add-full = Nhóm này đã đạt giới hạn 10 người.
 group-add-confirm = Thêm bạn
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

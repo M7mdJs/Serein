@@ -938,12 +938,13 @@ impl MessagingUi {
 								let frame = egui::Frame::new()
 									.fill(colors.raised)
 									.stroke(Stroke::new(1.0, colors.border))
-									.corner_radius(12)
-									.inner_margin(12)
+									.corner_radius(10)
+									.inner_margin(10)
 									.show(ui, |ui| {
 										ui.set_width(ui.available_width());
+										ui.spacing_mut().item_spacing.y = 6.0;
 										ui.horizontal(|ui| {
-											ui.spacing_mut().item_spacing.x = 10.0;
+											ui.spacing_mut().item_spacing.x = 8.0;
 											let avatar =
 												self.avatars.show_plain(ui, user, 32.0, state.demo);
 											if let Some(status) = entry.status {
@@ -967,23 +968,61 @@ impl MessagingUi {
 											ui.with_layout(
 												egui::Layout::right_to_left(egui::Align::Center),
 												|ui| {
-													let msg_btn = ui
-														.add_enabled_ui(can_message, |ui| {
-															round_action(
-																ui,
-																Icon::Threads,
-																&language.text("friends-message"),
-																colors.text_strong,
+													if let Some(icon) =
+														entry.activities.first().and_then(|a| {
+															a.image
+																.as_ref()
+																.or(a.small_image.as_ref())
+														}) {
+														let media = model::EmbedMedia {
+															url: Some(icon.clone()),
+															width: 24,
+															height: 24,
+															..Default::default()
+														};
+														self.avatars.show_media(
+															ui,
+															&media,
+															egui::vec2(24.0, 24.0),
+															state.demo,
+															crate::avatars::Surface::Inline,
+														);
+													} else if can_message {
+														let (btn_rect, btn_resp) = ui
+															.allocate_exact_size(
+																egui::Vec2::splat(26.0),
+																egui::Sense::click(),
+															);
+														if btn_resp.hovered() {
+															ui.painter().circle_filled(
+																btn_rect.center(),
+																13.0,
+																colors.hover,
+															);
+														}
+														icons::paint(
+															ui.painter(),
+															Icon::Threads,
+															btn_rect.shrink(5.0),
+															if btn_resp.hovered() {
+																colors.text_strong
+															} else {
+																colors.muted
+															},
+														);
+														if btn_resp
+															.on_hover_text(
+																language.text("friends-message"),
 															)
-														})
-														.inner;
-													if msg_btn.clicked() {
-														selected_dm = Some(user.id);
+															.clicked()
+														{
+															selected_dm = Some(user.id);
+														}
 													}
 													ui.with_layout(
 														egui::Layout::top_down(egui::Align::Min),
 														|ui| {
-															ui.spacing_mut().item_spacing.y = 1.0;
+															ui.spacing_mut().item_spacing.y = 0.0;
 															let display =
 																state.user_display_name(user);
 															let max_w =
@@ -1013,20 +1052,22 @@ impl MessagingUi {
 																&mut self.profile,
 																&mut self.user_action,
 															);
-															let summary = profiles::subtitle(
-																None,
-																entry.activities,
-															)
-															.or_else(|| {
-																entry.spot.as_ref().map(|spot| {
-																	format!(
-																		"{} \u{2014} {}",
-																		spot.channel.name,
-																		spot.guild.name
+															let summary = entry
+																.activities
+																.first()
+																.map(|a| a.name.clone())
+																.or_else(|| {
+																	entry.spot.as_ref().map(
+																		|spot| {
+																			format!(
+																				"{} · {}",
+																				spot.channel.name,
+																				spot.guild.name
+																			)
+																		},
 																	)
 																})
-															})
-															.unwrap_or_default();
+																.unwrap_or_default();
 															if !summary.is_empty() {
 																let summary_resp =
 																	composer_text::singleline_label(
@@ -1047,41 +1088,174 @@ impl MessagingUi {
 												},
 											);
 										});
-										if !entry.activities.is_empty() {
-											ui.add_space(8.0);
-											profiles::activity_list(
-												ui,
-												egui::Id::unique((
-													"active-now-activity",
-													user.id.0,
-												)),
-												entry.activities,
-												&mut self.avatars,
-												state.demo,
-												(colors.chat, colors.muted),
-											);
-										}
-										if let Some(spot) = &entry.spot {
-											ui.add_space(8.0);
-											if let Some(profiles::Action::JoinVoice {
-												guild,
-												channel,
-											}) = profiles::voice_card_for_surface(
-												ui,
-												state,
-												user,
-												spot,
-												&mut self.avatars,
-												colors.chat,
-											) {
-												join_voice = Some((guild, channel));
-											}
+										if !entry.activities.is_empty() || entry.spot.is_some() {
+											egui::Frame::new()
+												.fill(colors.chat)
+												.corner_radius(8)
+												.inner_margin(8)
+												.show(ui, |ui| {
+													ui.set_width(ui.available_width());
+													ui.spacing_mut().item_spacing.y = 6.0;
+													if let Some(activity) = entry.activities.first()
+													{
+														ui.horizontal(|ui| {
+															ui.spacing_mut().item_spacing.x = 8.0;
+															if let Some(icon) = activity
+																.image
+																.as_ref()
+																.or(activity.small_image.as_ref())
+															{
+																let media = model::EmbedMedia {
+																	url: Some(icon.clone()),
+																	width: 30,
+																	height: 30,
+																	..Default::default()
+																};
+																self.avatars.show_media(
+																	ui,
+																	&media,
+																	egui::vec2(30.0, 30.0),
+																	state.demo,
+																	crate::avatars::Surface::Inline,
+																);
+															}
+															ui.vertical(|ui| {
+																ui.spacing_mut().item_spacing.y =
+																	1.0;
+																let max_w =
+																	ui.available_width().max(24.0);
+																let primary = activity
+																	.details
+																	.as_deref()
+																	.filter(|s| !s.is_empty())
+																	.unwrap_or(&activity.name);
+																composer_text::singleline_label(
+																	ui,
+																	primary,
+																	egui::FontId::new(
+																		13.0,
+																		design::semibold_family(
+																			ui.ctx(),
+																		),
+																	),
+																	colors.text_strong,
+																	max_w,
+																	egui::Sense::hover(),
+																);
+																if let Some(detail) = activity
+																	.state
+																	.as_deref()
+																	.filter(|s| !s.is_empty())
+																{
+																	composer_text::singleline_label(
+																		ui,
+																		detail,
+																		egui::FontId::proportional(
+																			12.0,
+																		),
+																		colors.muted,
+																		max_w,
+																		egui::Sense::hover(),
+																	);
+																}
+															});
+														});
+													}
+													if !entry.activities.is_empty()
+														&& entry.spot.is_some()
+													{
+														design::card_divider(ui);
+													}
+													if let Some(spot) = &entry.spot {
+														let can_join = spot.blocked.is_none();
+														let row = ui.horizontal(|ui| {
+															ui.spacing_mut().item_spacing.x = 8.0;
+															let (icon_box, _) = ui
+																.allocate_exact_size(
+																	egui::Vec2::splat(26.0),
+																	egui::Sense::hover(),
+																);
+															ui.painter().rect_filled(
+																icon_box,
+																6,
+																colors.raised,
+															);
+															icons::paint(
+																ui.painter(),
+																Icon::Speaker,
+																icon_box.shrink(5.0),
+																colors.positive,
+															);
+															ui.vertical(|ui| {
+																ui.spacing_mut().item_spacing.y =
+																	0.0;
+																let max_w =
+																	ui.available_width().max(24.0);
+																composer_text::singleline_label(
+																	ui,
+																	&spot.channel.name,
+																	egui::FontId::new(
+																		13.0,
+																		design::semibold_family(
+																			ui.ctx(),
+																		),
+																	),
+																	colors.text_strong,
+																	max_w,
+																	egui::Sense::hover(),
+																);
+																composer_text::singleline_label(
+																	ui,
+																	&spot.guild.name,
+																	egui::FontId::proportional(
+																		11.5,
+																	),
+																	colors.muted,
+																	max_w,
+																	egui::Sense::hover(),
+																);
+															});
+														});
+														let click = ui.interact(
+															row.response.rect,
+															ui.id().with((
+																"active-voice-join",
+																spot.channel.id.0,
+															)),
+															if can_join {
+																egui::Sense::click()
+															} else {
+																egui::Sense::hover()
+															},
+														);
+														if can_join && click.hovered() {
+															ui.painter().rect_stroke(
+																row.response.rect.expand(2.0),
+																6,
+																Stroke::new(1.0, colors.border),
+																egui::StrokeKind::Inside,
+															);
+														}
+														if can_join
+															&& click
+																.on_hover_cursor(
+																	egui::CursorIcon::PointingHand,
+																)
+																.clicked()
+														{
+															join_voice = Some((
+																spot.guild.id,
+																spot.channel.id,
+															));
+														}
+													}
+												});
 										}
 									});
 								if frame.response.hovered() {
 									ui.painter().rect_stroke(
 										frame.response.rect,
-										12,
+										10,
 										Stroke::new(
 											1.0,
 											design::mix(colors.border, colors.text, 0.18),

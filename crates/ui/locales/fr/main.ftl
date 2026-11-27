@@ -4952,3 +4952,6 @@ group-add-title = Ajouter des amis au DM
 group-add-subtitle = Choisissez un ami à ajouter à ce groupe.
 group-add-full = Ce groupe a atteint la limite de 10 personnes.
 group-add-confirm = Ajouter un ami
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

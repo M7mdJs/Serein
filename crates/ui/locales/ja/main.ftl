@@ -4935,3 +4935,6 @@ group-add-title = DMに友達を追加
 group-add-subtitle = このグループに追加する友達を選んでください。
 group-add-full = このグループは上限の10人に達しています。
 group-add-confirm = 友達を追加
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

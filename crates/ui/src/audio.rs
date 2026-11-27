@@ -77,10 +77,14 @@ impl AudioUi {
 		let card = egui::Frame::new()
 			.fill(colors.raised)
 			.stroke(egui::Stroke::new(1.0, colors.border))
-			.corner_radius(if voice { 12 } else { 8 })
-			.inner_margin(12)
+			.corner_radius(if voice { 16 } else { 8 })
+			.inner_margin(if voice {
+				egui::Margin::symmetric(12, 8)
+			} else {
+				egui::Margin::same(12)
+			})
 			.show(ui, |ui| {
-				ui.set_width((width - 26.0).max(1.0)); // Padding plus the one-point border.
+				ui.set_width((width - if voice { 26.0 } else { 26.0 }).max(1.0)); // Padding plus the one-point border.
 				ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
 				ui.spacing_mut().slider_rail_height = 3.0;
 				// Chat buttons use the card fill; give media sliders their own visible track.
@@ -125,16 +129,30 @@ impl AudioUi {
 						AudioState::Failed(_) => "audio-control-retry",
 						_ => "audio-control-play",
 					});
-					let (_, play) =
-						ui.allocate_exact_size(egui::Vec2::splat(32.0), egui::Sense::click());
+					let (_, play) = ui.allocate_exact_size(
+						egui::Vec2::splat(if voice { 34.0 } else { 32.0 }),
+						egui::Sense::click(),
+					);
+					let play_fill = if voice {
+						if play.hovered() {
+							colors.accent.linear_multiply(1.1)
+						} else {
+							colors.accent
+						}
+					} else if play.hovered() {
+						button_color.gamma_multiply(0.85)
+					} else {
+						button_color
+					};
+					let play_glyph = if voice {
+						colors.accent_text
+					} else {
+						icon_color
+					};
 					ui.painter().circle_filled(
 						play.rect.center(),
-						16.0,
-						if play.hovered() {
-							button_color.gamma_multiply(0.85)
-						} else {
-							button_color
-						},
+						if voice { 17.0 } else { 16.0 },
+						play_fill,
 					);
 					play.widget_info(|| {
 						egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &label)
@@ -149,7 +167,7 @@ impl AudioUi {
 										egui::vec2(3.0, 12.0),
 									),
 									1,
-									icon_color,
+									play_glyph,
 								);
 							}
 						}
@@ -162,17 +180,17 @@ impl AudioUi {
 									crate::icons::Icon::Reload
 								},
 								play.rect.shrink(7.0),
-								icon_color,
+								play_glyph,
 							);
 						}
 						_ => {
 							ui.painter().add(egui::Shape::convex_polygon(
 								vec![
-									center + egui::vec2(-4.0, -6.0),
-									center + egui::vec2(6.0, 0.0),
-									center + egui::vec2(-4.0, 6.0),
+									center + egui::vec2(-3.5, -6.0),
+									center + egui::vec2(6.5, 0.0),
+									center + egui::vec2(-3.5, 6.0),
 								],
-								icon_color,
+								play_glyph,
 								egui::Stroke::NONE,
 							));
 						}
@@ -211,16 +229,29 @@ impl AudioUi {
 							AudioState::Playing | AudioState::Paused | AudioState::Loading
 						);
 					if voice {
-						if waveform(
-							ui,
-							&attachment.waveform,
-							&mut position,
-							duration,
-							can_seek,
-							&colors,
-						) {
-							self.command = Some(AudioCommand::Seek(position));
-						}
+						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+							let time_text = if duration > 0.0 {
+								timestamp((duration - position).max(0.0))
+							} else {
+								"--:--".into()
+							};
+							ui.label(
+								egui::RichText::new(time_text)
+									.size(12.0)
+									.monospace()
+									.color(colors.muted),
+							);
+							if waveform(
+								ui,
+								&attachment.waveform,
+								&mut position,
+								duration,
+								can_seek,
+								&colors,
+							) {
+								self.command = Some(AudioCommand::Seek(position));
+							}
+						});
 					} else {
 						let seek = ui.add_enabled(
 							can_seek,
@@ -242,27 +273,22 @@ impl AudioUi {
 						}
 					}
 				});
-				ui.horizontal(|ui| {
-					let position = if active { self.position } else { 0.0 };
-					let duration_label = if duration > 0.0 {
-						timestamp(duration)
-					} else {
-						"--:--".into()
-					};
-					ui.label(
-						egui::RichText::new(if voice {
-							if duration > 0.0 {
-								timestamp((duration - position).max(0.0))
-							} else {
-								"--:--".into()
-							}
+				if !voice {
+					ui.horizontal(|ui| {
+						let position = if active { self.position } else { 0.0 };
+						let duration_label = if duration > 0.0 {
+							timestamp(duration)
 						} else {
-							format!("{} / {duration_label}", timestamp(position))
-						})
-						.size(11.0)
-						.color(colors.muted),
-					);
-					if !voice {
+							"--:--".into()
+						};
+						ui.label(
+							egui::RichText::new(format!(
+								"{} / {duration_label}",
+								timestamp(position)
+							))
+							.size(11.0)
+							.color(colors.muted),
+						);
 						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 							ui.spacing_mut().item_spacing.x = 6.0;
 							ui.spacing_mut().slider_width = 52.0;
@@ -296,8 +322,8 @@ impl AudioUi {
 								colors.muted,
 							);
 						});
-					}
-				});
+					});
+				}
 				match state {
 					AudioState::Loading => {
 						ui.small(crate::i18n::translate("audio-show-loading-audio"));
@@ -376,16 +402,16 @@ fn waveform(
 			.and_then(|part| part.iter().max())
 			.copied()
 			.unwrap_or(0);
-		let height = 3.0 + f32::from(amplitude) / 255.0 * 25.0;
+		let height = 4.0 + f32::from(amplitude) / 255.0 * 24.0;
 		let x = rect.left() + (index as f32 + 0.5) * rect.width() / bars as f32;
 		let played = duration > 0.0 && (index as f64 / bars as f64) < *position / duration;
 		ui.painter().rect_filled(
-			egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(2.0, height)),
-			1,
+			egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::vec2(2.5, height)),
+			1.25,
 			if played {
-				colors.text_strong
+				colors.accent
 			} else {
-				colors.muted.gamma_multiply(0.65)
+				colors.muted.gamma_multiply(0.45)
 			},
 		);
 	}

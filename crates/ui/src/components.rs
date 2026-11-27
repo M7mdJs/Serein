@@ -160,24 +160,13 @@ impl Components {
 					let frame = if c.kind == 17 {
 						egui::Frame::new()
 							.fill(design::opaque_card_fill(ui, colors.raised))
-							.stroke(egui::Stroke::new(
-								1.0,
-								c.accent_color
-									.map(|rgb| {
-										egui::Color32::from_rgb(
-											(rgb >> 16) as u8,
-											(rgb >> 8) as u8,
-											rgb as u8,
-										)
-									})
-									.unwrap_or(colors.border),
-							))
+							.stroke(egui::Stroke::new(1.0, colors.border))
 							.corner_radius(8)
-							.inner_margin(12)
+							.inner_margin(14)
 					} else {
 						egui::Frame::new()
 					};
-					frame.show(ui, |ui| {
+					let container = frame.show(ui, |ui| {
 						if c.kind != 1 {
 							// Discord separates stacked container/section children by 8px.
 							ui.spacing_mut().item_spacing.y = 8.0;
@@ -289,6 +278,19 @@ impl Components {
 							);
 						}
 					});
+					if c.kind == 17
+						&& let Some(rgb) = c.accent_color
+					{
+						let accent =
+							egui::Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
+						ui.painter().line_segment(
+							[
+								container.response.rect.left_top() + egui::vec2(1.5, 6.0),
+								container.response.rect.left_bottom() - egui::vec2(-1.5, 6.0),
+							],
+							egui::Stroke::new(3.0, accent),
+						);
+					}
 				}
 				2 => {
 					if c.style == Some(6) {
@@ -328,7 +330,7 @@ impl Components {
 						Some(1) => button.fill(colors.accent),
 						Some(3) => button.fill(colors.positive),
 						Some(4) => button.fill(colors.danger),
-						_ => button,
+						_ => button.fill(colors.base),
 					};
 					let response = ui.add_enabled(!c.disabled && (linked || enabled), button);
 					if linked {
@@ -336,10 +338,10 @@ impl Components {
 							ui.painter(),
 							crate::icons::Icon::External,
 							egui::Rect::from_center_size(
-								response.rect.right_center() - egui::vec2(14.0, 0.0),
-								egui::Vec2::splat(16.0),
+								response.rect.right_center() - egui::vec2(12.0, 0.0),
+								egui::Vec2::splat(14.0),
 							),
-							colors.muted,
+							colors.text,
 						);
 					}
 					if response.clicked() {
@@ -1190,6 +1192,11 @@ fn show_media(
 		..Default::default()
 	};
 	if thumbnail {
+		if image.url.as_deref().is_none_or(str::is_empty)
+			&& image.proxy_url.as_deref().is_none_or(str::is_empty)
+		{
+			return;
+		}
 		let response = avatars
 			.show_media(
 				ui,
@@ -1219,10 +1226,18 @@ fn show_media(
 	if let Some(description) = description {
 		ui.small(description);
 	}
-	if ui
-		.small_button(crate::i18n::translate("components-show-media-open-media"))
-		.clicked()
-	{
+	let colors = design::palette(ui);
+	let open_btn = ui.add(
+		egui::Button::new(
+			egui::RichText::new(crate::i18n::translate("components-show-media-open-media"))
+				.size(12.0)
+				.color(colors.text),
+		)
+		.fill(colors.base)
+		.stroke(egui::Stroke::new(1.0, colors.border))
+		.corner_radius(6),
+	);
+	if open_btn.clicked() {
 		*opening = resolve_media(&media.url, message).and_then(markdown::external_url);
 	}
 }

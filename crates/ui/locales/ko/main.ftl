@@ -5235,3 +5235,6 @@ group-add-title = DM에 친구 추가
 group-add-subtitle = 이 그룹에 추가할 친구를 선택하세요.
 group-add-full = 이 그룹은 최대 인원인 10명에 도달했습니다.
 group-add-confirm = 친구 추가
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

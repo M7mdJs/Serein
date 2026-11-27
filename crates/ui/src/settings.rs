@@ -1762,6 +1762,32 @@ pub(crate) fn cosmetic_switches(
 			}
 		};
 	}
+	let mut all_enabled = cosmetics.decorations
+		&& cosmetics.nameplates
+		&& cosmetics.effects
+		&& cosmetics.frames
+		&& cosmetics.name_styles
+		&& !cosmetics.solid_names
+		&& !cosmetics.hide_clan_tags;
+	if details {
+		design::card_divider(ui);
+		if design::switch(
+			ui,
+			"settings-cosmetics-show-all",
+			Some("settings-cosmetics-show-all-description"),
+			&mut all_enabled,
+		)
+		.changed()
+		{
+			cosmetics.decorations = all_enabled;
+			cosmetics.nameplates = all_enabled;
+			cosmetics.effects = all_enabled;
+			cosmetics.frames = all_enabled;
+			cosmetics.name_styles = all_enabled;
+			cosmetics.solid_names = !all_enabled;
+			cosmetics.hide_clan_tags = !all_enabled;
+		}
+	}
 	let mut gradients = !cosmetics.solid_names;
 	let mut clan_tags = !cosmetics.hide_clan_tags;
 	let switches = [

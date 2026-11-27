@@ -664,10 +664,10 @@ pub fn show(
 			let frame = egui::Frame::new()
 				.fill(card_surface.fill(ui, colors.raised))
 				.stroke(crate::design::message_card_stroke(ui))
-				.corner_radius(5)
-				.inner_margin(12)
+				.corner_radius(8)
+				.inner_margin(14)
 				.show(ui, |ui| {
-					ui.set_width((width - 24.0).max(1.0));
+					ui.set_width((width - 28.0).max(1.0));
 					// Size independently of the remaining timeline viewport.
 					ui.set_max_height(640.0);
 					// Bound exceptional cards' geometry; normal cards grow to their content height.

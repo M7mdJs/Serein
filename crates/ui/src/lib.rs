@@ -2583,6 +2583,8 @@ impl MessagingUi {
 					// Search and Friends share one row; Friends is the compact glyph beside it.
 					ui.horizontal(|ui| {
 						ui.spacing_mut().item_spacing.x = 6.0;
+						let friends_label = language.text("friends");
+						let friends_width = 92.0;
 						let find = ui
 							.add_enabled_ui(
 								!self.ime_active
@@ -2594,8 +2596,12 @@ impl MessagingUi {
 									}),
 								|ui| {
 									ui.add_sized(
-										[(ui.available_width() - 36.0).max(60.0), 30.0],
+										[
+											(ui.available_width() - friends_width - 6.0).max(60.0),
+											34.0,
+										],
 										egui::Button::new(language.text("find-conversation"))
+											.corner_radius(6)
 											.truncate(),
 									)
 								},
@@ -2613,39 +2619,56 @@ impl MessagingUi {
 							self.switcher.open(&ctx);
 						}
 						let friends = state.selected.is_none();
-						let (rect, response) =
-							ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
+						let (rect, response) = ui.allocate_exact_size(
+							egui::vec2(friends_width, 34.0),
+							egui::Sense::click(),
+						);
 						let hovered = response.hovered() || response.has_focus();
-						if friends || hovered {
-							ui.painter().rect_filled(
-								rect,
-								6,
-								if friends {
-									colors.selected
-								} else {
-									colors.hover
-								},
-							);
-						}
-						icons::paint(
-							ui.painter(),
-							icons::Icon::People,
-							rect.shrink(7.0),
-							if friends || hovered {
-								colors.text_strong
+						ui.painter().rect(
+							rect,
+							6,
+							if friends {
+								colors.selected
+							} else if hovered {
+								colors.hover
 							} else {
-								colors.muted
+								colors.raised
 							},
+							egui::Stroke::new(1.0, colors.border),
+							egui::StrokeKind::Inside,
+						);
+						let tint = if friends || hovered {
+							colors.text_strong
+						} else {
+							colors.muted
+						};
+						let icon_rect = egui::Rect::from_center_size(
+							egui::pos2(rect.left() + 18.0, rect.center().y),
+							egui::Vec2::splat(18.0),
+						);
+						icons::paint(ui.painter(), icons::Icon::People, icon_rect, tint);
+						let label_galley = ui.painter().layout_no_wrap(
+							friends_label.clone(),
+							egui::FontId::new(13.0, design::semibold_family(ui.ctx())),
+							tint,
+						);
+						ui.painter().galley(
+							egui::pos2(
+								icon_rect.right() + 6.0,
+								rect.center().y - label_galley.size().y / 2.0,
+							),
+							label_galley,
+							tint,
 						);
 						response.widget_info(|| {
 							egui::WidgetInfo::selected(
 								egui::Role::Button,
 								true,
 								friends,
-								language.text("friends"),
+								friends_label.clone(),
 							)
 						});
-						if response.on_hover_text(language.text("friends")).clicked() {
+						if response.on_hover_text(friends_label).clicked() {
 							state.open_home();
 							self.guild = None;
 							self.search.open = false;
@@ -2831,6 +2854,21 @@ impl MessagingUi {
 					divider(ui);
 				}
 				// Reserved before the avatar so the identity hover fill stays behind it.
+				if let Some(user) = &state.user {
+					let row_rect = egui::Rect::from_min_size(
+						ui.cursor().min,
+						egui::vec2(ui.available_width(), 44.0),
+					);
+					self.avatars.paint_nameplate(
+						ui,
+						user,
+						row_rect,
+						8,
+						ui.rect_contains_pointer(row_rect),
+						false,
+						state.demo,
+					);
+				}
 				let highlight = ui.painter().add(egui::Shape::Noop);
 				let mut identity_hover = None;
 				let mut avatar_rect = None;
@@ -2905,23 +2943,42 @@ impl MessagingUi {
 														|| language.text("your-account"),
 														|u| u.name.clone(),
 													);
-													name_styles::label(
-														ui,
-														state
+													ui.horizontal(|ui| {
+														ui.spacing_mut().item_spacing.x = 4.0;
+														name_styles::label(
+															ui,
+															state
+																.user
+																.as_ref()
+																.and_then(name_styles::style),
+															&name,
+															egui::FontId::new(
+																14.0,
+																design::semibold_family(ui.ctx()),
+															),
+															None,
+															card_fill,
+															colors.text_strong,
+															egui::Sense::hover(),
+															true,
+														);
+														if let Some(tag) = state
 															.user
 															.as_ref()
-															.and_then(name_styles::style),
-														&name,
-														egui::FontId::new(
-															14.0,
-															design::semibold_family(ui.ctx()),
-														),
-														None,
-														card_fill,
-														colors.text_strong,
-														egui::Sense::hover(),
-														true,
-													);
+															.and_then(|u| {
+																u.primary_guild.as_deref()
+															})
+															.filter(|_| {
+																!self.cosmetics.hide_clan_tags
+															}) {
+															profiles::server_tag(
+																ui,
+																tag,
+																&mut self.avatars,
+																state.demo,
+															);
+														}
+													});
 													let status_text = if !self
 														.own_presence
 														.custom_status

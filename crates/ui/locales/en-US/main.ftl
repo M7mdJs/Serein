@@ -5273,3 +5273,6 @@ group-add-title = Add Friends to DM
 group-add-subtitle = Choose a friend to add to this group.
 group-add-full = This group has reached the 10-person limit.
 group-add-confirm = Add Friend
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

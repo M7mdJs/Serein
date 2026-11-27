@@ -4955,3 +4955,6 @@ group-add-title = Agregar amigos al MD
 group-add-subtitle = Elige un amigo para agregarlo a este grupo.
 group-add-full = Este grupo ha alcanzado el límite de 10 personas.
 group-add-confirm = Agregar amigo
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

@@ -238,7 +238,7 @@ impl ServerMenu {
 					ui,
 					icons::Icon::AddPeople,
 					&crate::i18n::translate("server-menu-header-create-invite"),
-					design::palette(ui).accent,
+					design::palette(ui).text,
 				)
 			})
 			.inner

@@ -627,13 +627,14 @@ impl MessagingUi {
 									guild_id: id.to_string(),
 								},
 							);
+							self.server_menu.read_item(ui, state, id);
+							ui.separator();
 							// The invite dialog belongs to the active server, so choosing it
 							// from the rail also opens that server, like settings do.
 							let invite = self.server_menu.invite_item(ui, state, id);
 							if invite {
 								self.guild = Some(id);
 							}
-							self.server_menu.read_item(ui, state, id);
 							ui.separator();
 							let settings = self.server_menu.settings_item(ui, state, id);
 							let notifications = self.server_menu.notifications_item(ui, state, id);

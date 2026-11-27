@@ -5049,3 +5049,6 @@ group-add-title = 添加朋友到私信
 group-add-subtitle = 选择要添加到此群组的朋友。
 group-add-full = 此群组已达到 10 人上限。
 group-add-confirm = 添加朋友
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.

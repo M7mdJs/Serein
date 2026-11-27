@@ -270,7 +270,49 @@ impl MessagingUi {
 				self.shown_presence_status(),
 				colors.raised,
 			);
-			ui.add_space((avatar.bottom() + 12.0 - ui.cursor().top()).max(0.0));
+			let mut header_bottom = avatar.bottom();
+			if let Some(profile) = &state.own_profile.data {
+				let catalog = state.badges.as_ref();
+				let icon_badges: Vec<_> = model::badges::displayed_badges(&profile.badges, catalog)
+					.into_iter()
+					.filter(|b| b.icon_key().is_some())
+					.collect();
+				if !icon_badges.is_empty() {
+					const BADGE: f32 = 20.0;
+					let right = banner.right() - 12.0;
+					let count = icon_badges.len() as f32;
+					let width = (count * BADGE + (count - 1.0) * 4.0 + 10.0)
+						.min((right - avatar.right() - 12.0).max(32.0));
+					let pill = egui::Rect::from_min_max(
+						egui::pos2(right - width, banner.bottom() + 8.0),
+						egui::pos2(right, banner.bottom() + 120.0),
+					);
+					let resp = ui.scope_builder(egui::UiBuilder::new().max_rect(pill), |ui| {
+						egui::Frame::new()
+							.fill(colors.base)
+							.corner_radius(8)
+							.inner_margin(5)
+							.show(ui, |ui| {
+								ui.set_width((width - 10.0).max(1.0));
+								ui.horizontal_wrapped(|ui| {
+									ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+									for badge in &icon_badges {
+										crate::badges::badge_icon(
+											ui,
+											&mut self.avatars,
+											badge,
+											catalog,
+											BADGE,
+											state.demo,
+										);
+									}
+								});
+							});
+					});
+					header_bottom = header_bottom.max(resp.response.rect.bottom());
+				}
+			}
+			ui.add_space((header_bottom + 12.0 - ui.cursor().top()).max(0.0));
 		} else {
 			ui.add_space(12.0);
 		}
@@ -501,6 +543,11 @@ impl MessagingUi {
 			.inner_margin(12)
 			.show(ui, |ui| {
 				ui.set_width(ui.available_width());
+				if let Some(user) = &state.user {
+					let bg_rect = ui.max_rect().expand(12.0);
+					self.avatars
+						.paint_nameplate(ui, user, bg_rect, 8, false, false, state.demo);
+				}
 				ui.spacing_mut().item_spacing.y = 2.0;
 				let profile = state.own_profile.data.as_ref();
 				let name = profile
@@ -508,10 +555,23 @@ impl MessagingUi {
 					.or_else(|| state.user.as_ref().map(|u| u.name.as_str()))
 					.map(str::to_owned)
 					.unwrap_or_else(|| crate::i18n::translate("your-account"));
-				ui.add(
-					egui::Label::new(design::semibold(ui, &name, 20.0).color(colors.text_strong))
+				ui.horizontal_wrapped(|ui| {
+					ui.spacing_mut().item_spacing.x = 6.0;
+					ui.add(
+						egui::Label::new(
+							design::semibold(ui, &name, 20.0).color(colors.text_strong),
+						)
 						.wrap(),
-				);
+					);
+					if let Some(tag) = state
+						.user
+						.as_ref()
+						.and_then(|u| u.primary_guild.as_deref())
+						.filter(|_| !self.cosmetics.hide_clan_tags)
+					{
+						profiles::server_tag(ui, tag, &mut self.avatars, state.demo);
+					}
+				});
 				if let Some(profile) = profile {
 					ui.add(
 						egui::Label::new(

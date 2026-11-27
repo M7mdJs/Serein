@@ -4938,3 +4938,6 @@ group-add-title = DM'e arkadaş ekle
 group-add-subtitle = Bu gruba eklemek için bir arkadaş seç.
 group-add-full = Bu grup 10 kişilik sınıra ulaştı.
 group-add-confirm = Arkadaş Ekle
+
+settings-cosmetics-show-all = Show profile cosmetics
+settings-cosmetics-show-all-description = Turn all profile decorations, nameplates, effects, frames, name styles, gradients, and server tags on or off at once.
