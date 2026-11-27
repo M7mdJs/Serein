@@ -58,6 +58,7 @@ enum Pending {
 		request: u64,
 		epoch: u64,
 		manual: bool,
+		optimistic: bool,
 		mention_count: Option<u32>,
 	},
 	Guild {
@@ -151,6 +152,7 @@ impl ReadState {
 				message,
 				epoch,
 				manual: false,
+				optimistic: true,
 				..
 			}) if *pending == channel && *epoch == current_epoch => Some(*message),
 			Some(Pending::Guild { channels, .. }) => channels
@@ -489,7 +491,11 @@ impl State {
 			self.read_state.status = None;
 			return None;
 		}
-		Some(self.mark_read_command(channel, message, false, None))
+		let command = self.mark_read_command(channel, message, false, None);
+		if let Some(Pending::Channel { optimistic, .. }) = &mut self.read_state.pending {
+			*optimistic = true;
+		}
+		Some(command)
 	}
 	/// Leaving a channel acknowledges the latest message the reader had on screen there,
 	/// even when a short conversation never let them scroll toward the bottom.
@@ -798,6 +804,7 @@ impl State {
 			request,
 			epoch,
 			manual,
+			optimistic: false,
 			mention_count,
 		});
 		self.read_state.status = None;
@@ -1001,6 +1008,7 @@ impl State {
 					request: pending_request,
 					epoch,
 					manual,
+					optimistic: _,
 					mention_count,
 				}) = self.read_state.pending
 				else {
