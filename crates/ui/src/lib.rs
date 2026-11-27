@@ -2945,33 +2945,17 @@ impl MessagingUi {
 													} else {
 														language.text("reconnecting")
 													};
-													if composer_text::has_rtl(&status_text) {
-														let width = (identity_right
-															- ui.cursor().left())
-														.max(24.0);
-														let galley =
-															composer_text::singleline_galley(
-																ui,
-																status_text,
-																egui::FontId::proportional(12.0),
-																colors.muted,
-																width,
-															);
-														ui.add(
-															egui::Label::new(galley)
-																.selectable(false),
-														);
-													} else {
-														ui.add(
-															egui::Label::new(
-																RichText::new(status_text)
-																	.size(12.0)
-																	.color(colors.muted),
-															)
-															.truncate()
-															.selectable(false),
-														);
-													}
+													let width = (identity_right
+														- ui.cursor().left())
+													.max(24.0);
+													composer_text::singleline_label(
+														ui,
+														&status_text,
+														egui::FontId::proportional(12.0),
+														colors.muted,
+														width,
+														egui::Sense::hover(),
+													);
 												})
 												.response;
 											let identity = ui

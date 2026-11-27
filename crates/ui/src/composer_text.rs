@@ -1796,7 +1796,7 @@ pub(crate) fn singleline_galley(
 				}],
 				f32::INFINITY,
 			)
-			.and_then(|rtl| rtl.lines.into_iter().next().map(|line| line.galley))
+			.and_then(|rtl| rtl.lines.first().map(|line| line.galley.clone()))
 		};
 		if let Some(full) = make_rtl(&text) {
 			if !max_width.is_finite() || full.size().x <= max_width.max(1.0) {
@@ -1827,6 +1827,28 @@ pub(crate) fn singleline_galley(
 	job.wrap.max_rows = 1;
 	job.wrap.break_anywhere = true;
 	ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// Non-selectable single-line label with RTL shaping and truncation when needed.
+pub(crate) fn singleline_label(
+	ui: &mut egui::Ui,
+	text: &str,
+	font: egui::FontId,
+	color: Color32,
+	max_width: f32,
+	sense: egui::Sense,
+) -> egui::Response {
+	if has_rtl(text) {
+		let galley = singleline_galley(ui, text.to_owned(), font, color, max_width);
+		ui.add(egui::Label::new(galley).sense(sense).selectable(false))
+	} else {
+		ui.add(
+			egui::Label::new(egui::RichText::new(text).font(font).color(color))
+				.truncate()
+				.sense(sense)
+				.selectable(false),
+		)
+	}
 }
 
 /// Multi-segment single-line galley with RTL support (e.g. typing indicator `"<name> is typing..."`).

@@ -753,28 +753,14 @@ impl MessagingUi {
 									let reserved =
 										if hot && username.is_some() { 96.0 } else { 0.0 };
 									let max_name = (ui.available_width() - reserved).max(40.0);
-									if composer_text::has_rtl(&display) {
-										let galley = composer_text::singleline_galley(
-											ui,
-											display,
-											egui::FontId::new(
-												15.0,
-												design::semibold_family(ui.ctx()),
-											),
-											colors.text_strong,
-											max_name,
-										);
-										ui.add(egui::Label::new(galley).selectable(false));
-									} else {
-										ui.add(
-											egui::Label::new(
-												design::semibold(ui, display, 15.0)
-													.color(colors.text_strong),
-											)
-											.truncate()
-											.selectable(false),
-										);
-									}
+									composer_text::singleline_label(
+										ui,
+										display,
+										egui::FontId::new(15.0, design::semibold_family(ui.ctx())),
+										colors.text_strong,
+										max_name,
+										egui::Sense::hover(),
+									);
 									if hot && let Some(username) = username {
 										ui.add(
 											egui::Label::new(
@@ -821,26 +807,14 @@ impl MessagingUi {
 											colors.positive,
 										);
 									}
-									let sub_resp = if composer_text::has_rtl(&subtitle) {
-										let galley = composer_text::singleline_galley(
-											ui,
-											subtitle.clone(),
-											egui::FontId::proportional(13.0),
-											colors.muted,
-											ui.available_width().max(24.0),
-										);
-										ui.add(egui::Label::new(galley).selectable(false))
-									} else {
-										ui.add(
-											egui::Label::new(
-												RichText::new(&subtitle)
-													.size(13.0)
-													.color(colors.muted),
-											)
-											.truncate()
-											.selectable(false),
-										)
-									};
+									let sub_resp = composer_text::singleline_label(
+										ui,
+										&subtitle,
+										egui::FontId::proportional(13.0),
+										colors.muted,
+										ui.available_width().max(24.0),
+										egui::Sense::hover(),
+									);
 									sub_resp.on_hover_text(&subtitle);
 								});
 								let mut actions = ui.new_child(
@@ -1015,43 +989,19 @@ impl MessagingUi {
 															let max_w =
 																ui.available_width().max(24.0);
 															let name_resp =
-																if composer_text::has_rtl(&display)
-																{
-																	let galley = composer_text::singleline_galley(
-																		ui,
-																		display,
-																		egui::FontId::new(
-																			14.0,
-																			design::semibold_family(
-																				ui.ctx(),
-																			),
+																composer_text::singleline_label(
+																	ui,
+																	display,
+																	egui::FontId::new(
+																		14.0,
+																		design::semibold_family(
+																			ui.ctx(),
 																		),
-																		colors.text_strong,
-																		max_w,
-																	);
-																	ui.add(
-																		egui::Label::new(galley)
-																			.sense(
-																				egui::Sense::click(
-																				),
-																			)
-																			.selectable(false),
-																	)
-																} else {
-																	ui.add(
-																		egui::Label::new(
-																			design::semibold(
-																				ui, display, 14.0,
-																			)
-																			.color(
-																				colors.text_strong,
-																			),
-																		)
-																		.truncate()
-																		.sense(egui::Sense::click())
-																		.selectable(false),
-																	)
-																};
+																	),
+																	colors.text_strong,
+																	max_w,
+																	egui::Sense::click(),
+																);
 															self.profile.person_click(
 																ui, &name_resp, None, user,
 															);
@@ -1079,37 +1029,16 @@ impl MessagingUi {
 															.unwrap_or_default();
 															if !summary.is_empty() {
 																let summary_resp =
-																	if composer_text::has_rtl(
-																		&summary,
-																	) {
-																		let galley = composer_text::singleline_galley(
+																	composer_text::singleline_label(
 																		ui,
-																		summary.clone(),
+																		&summary,
 																		egui::FontId::proportional(
 																			12.0,
 																		),
 																		colors.muted,
 																		max_w,
+																		egui::Sense::hover(),
 																	);
-																		ui.add(
-																			egui::Label::new(
-																				galley,
-																			)
-																			.selectable(false),
-																		)
-																	} else {
-																		ui.add(
-																			egui::Label::new(
-																				RichText::new(
-																					&summary,
-																				)
-																				.size(12.0)
-																				.color(colors.muted),
-																			)
-																			.truncate()
-																			.selectable(false),
-																		)
-																	};
 																summary_resp
 																	.on_hover_text(&summary);
 															}
