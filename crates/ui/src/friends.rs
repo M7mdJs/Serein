@@ -1678,7 +1678,7 @@ mod tests {
 		let cards = active_friend_cards(&state, None);
 		assert!(cards.iter().any(|c| c.user.id == friend_id));
 
-		let mut collect_text = |shape: &egui::Shape, out: &mut Vec<String>| {
+		let collect_text = |shape: &egui::Shape, out: &mut Vec<String>| {
 			let mut stack = vec![shape];
 			while let Some(next) = stack.pop() {
 				match next {

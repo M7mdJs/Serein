@@ -2548,17 +2548,18 @@ mod tests {
 		frame(0.1, &mut single, vec![egui::Event::Text("!".into())]);
 		assert!(single.contains('!') && has_rtl(&single));
 
-		let truncated = ctx
-			.run_ui(Default::default(), |ui| {
-				singleline_galley(
-					ui,
-					"صلي على النبي وبارك عليه دائما وأبدا في كل وقت".into(),
-					egui::FontId::proportional(12.0),
-					egui::Color32::WHITE,
-					90.0,
-				)
-			})
-			.inner;
+		let mut truncated = None;
+		ctx.run_ui(Default::default(), |ui| {
+			truncated = Some(singleline_galley(
+				ui,
+				"صلي على النبي وبارك عليه دائما وأبدا في كل وقت".into(),
+				egui::FontId::proportional(12.0),
+				egui::Color32::WHITE,
+				90.0,
+			));
+		})
+		.drop_without_applying_deltas();
+		let truncated = truncated.unwrap();
 		assert!(truncated.size().x <= 91.0 && truncated.job.text.contains('\u{2026}'));
 	}
 }
