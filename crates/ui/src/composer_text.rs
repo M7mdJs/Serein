@@ -1794,7 +1794,7 @@ pub(crate) fn singleline_galley(
 					object: None,
 					copy: false,
 				}],
-				f32::INFINITY,
+				16_384.0,
 			)
 			.and_then(|rtl| rtl.lines.first().map(|line| line.galley.clone()))
 		};
@@ -1806,7 +1806,13 @@ pub(crate) fn singleline_galley(
 			let boundaries: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
 			let mut lo = 0usize;
 			let mut hi = boundaries.len().saturating_sub(1);
-			let mut best = make_rtl("\u{2026}").unwrap_or(full);
+			let mut best = ui.fonts_mut(|f| {
+				f.layout_job(LayoutJob::simple_singleline(
+					"\u{2026}".into(),
+					font.clone(),
+					color,
+				))
+			});
 			while lo < hi {
 				let mid = lo + (hi - lo).div_ceil(2);
 				let candidate = format!("{}\u{2026}", &text[..boundaries[mid]]);
@@ -1868,7 +1874,7 @@ pub(crate) fn singleline_spans_galley(
 				copy: false,
 			})
 			.collect();
-		if let Some(rtl) = crate::rtl::layout(ui.ctx(), &rtl_spans, f32::INFINITY)
+		if let Some(rtl) = crate::rtl::layout(ui.ctx(), &rtl_spans, 16_384.0)
 			&& let Some(line) = rtl.lines.first()
 		{
 			return line.galley.clone();
